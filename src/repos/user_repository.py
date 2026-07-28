@@ -3,10 +3,9 @@ from sqlalchemy import select
 from datetime import datetime, timezone
 from typing import Protocol
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 from db_and_models.user import User as UserModel
 from db_and_models.user import AccountState
-from db_and_models.user_role import UserRole
 from repos.exceptions import ObjectNotFoundException, ObjectAlreadyExists
 
 
@@ -63,7 +62,7 @@ class UserRepository:
             email=user.email,
             password_hash=user.password_hash,
             account_state=user.account_state,
-            role=user.role.role,
+            role=user.role,
             created_at=user.created_at,
         )
 
@@ -74,7 +73,7 @@ class UserRepository:
             email=user.email,
             password_hash=user.password_hash,
             account_state=user.account_state,
-            role=UserRole(role=user.role),
+            role=user.role,
             created_at=datetime.now(timezone.utc)
         )
 
@@ -93,7 +92,7 @@ class UserRepository:
         orm_user.email = user.email
         orm_user.password_hash = user.password_hash
         orm_user.account_state = user.account_state
-        orm_user.role.role = user.role
+        orm_user.role = user.role
         orm_user.created_at = user.created_at
 
         try:
@@ -103,7 +102,6 @@ class UserRepository:
 
     def get_user_by_id(self, u_id: str) -> User | None:
         stmt = (select(UserModel)
-                .options(joinedload(UserModel.role))
                 .where(UserModel.id == u_id))
         user = self._session.scalar(stmt)
 
@@ -114,7 +112,6 @@ class UserRepository:
 
     def get_user_by_username(self, username: str) -> User | None:
         stmt = (select(UserModel)
-                .options(joinedload(UserModel.role))
                 .where(UserModel.username == username))
         user = self._session.scalar(stmt)
 
@@ -125,7 +122,6 @@ class UserRepository:
 
     def get_user_by_email(self, email: str) -> User | None:
         stmt = (select(UserModel)
-                .options(joinedload(UserModel.role))
                 .where(UserModel.email == email))
         user = self._session.scalar(stmt)
 

@@ -8,37 +8,9 @@ from uuid import uuid4
 from services.config import HASHING_TIME_COST
 from argon2 import PasswordHasher
 
-
-class FakeUserRepository:
-    def __init__(self) -> None:
-        self.users: dict[str, User] = {}
-
-    def create_user(self, user: User) -> None:
-        self.users[user.id] = user
-
-    def update_user(self, user: User) -> None:
-        if self.users.get(user.id) is None:
-            raise ValueError
-        self.users[user.id] = user
-
-    def get_user_by_id(self, u_id: str) -> User | None:
-        return self.users.get(u_id)
-
-    def get_user_by_username(self, username: str) -> User | None:
-        for user in self.users.values():
-            if user.username == username:
-                return user
-
-    def get_user_by_email(self, email: str) -> User | None:
-        for user in self.users.values():
-            if user.email == email:
-                return user
-
-
 from services.token_service import TokenPair
 from repos.refresh_token_repository import RefreshToken
 from services.exceptions import NotAuthenticatedException
-from services.user_capability_checker_service import UserCapabilityCheckerServiceProtocol
 
 
 class FakeTokenService:
@@ -79,7 +51,7 @@ class FakeTokenService:
 
 
 class FakeCapabilityChecker:
-    def __init__(self, user_repo: FakeUserRepository) -> None:
+    def __init__(self, user_repo) -> None:
         self._user_repo = user_repo
 
     def get_capable_user_by_id_or_raise(self, user_id: str) -> User:
@@ -92,23 +64,19 @@ class FakeCapabilityChecker:
 
 
 @pytest.fixture
-def fake_user_repo():
-    return FakeUserRepository()
-
-@pytest.fixture
 def fake_token_service():
     return FakeTokenService()
 
 @pytest.fixture
-def fake_capability_checker(fake_user_repo):
-    return FakeCapabilityChecker(fake_user_repo)
+def fake_capability_checker(user_repo):
+    return FakeCapabilityChecker(user_repo)
 
 @pytest.fixture
-def auth_service(fake_user_repo, fake_token_service, fake_capability_checker):
-    return UserAuthService(fake_user_repo, fake_token_service, fake_capability_checker)
+def auth_service(user_repo, fake_token_service, fake_capability_checker):
+    return UserAuthService(user_repo, fake_token_service, fake_capability_checker)
 
 
-def test_get_active_user_or_raise_happy_path(auth_service, fake_user_repo, fake_token_service):
+def test_get_active_user_or_raise_happy_path(auth_service, user_repo, fake_token_service):
     user_id = str(uuid4())
     fake_token_service.token_to_return = RefreshToken(
         id=user_id,
@@ -118,7 +86,7 @@ def test_get_active_user_or_raise_happy_path(auth_service, fake_user_repo, fake_
         created_at=datetime.now(timezone.utc)
     )
 
-    fake_user_repo.create_user(
+    user_repo.create_user(
         User(
             id=user_id,
             username="some_username",
@@ -135,7 +103,7 @@ def test_get_active_user_or_raise_happy_path(auth_service, fake_user_repo, fake_
     assert res.id == user_id
 
 def test_get_active_user_or_raise_user_is_none(auth_service,
-                                               fake_user_repo,
+                                               user_repo,
                                                fake_token_service):
     user_id = str(uuid4())
     fake_token_service.token_to_return = RefreshToken(
@@ -150,7 +118,7 @@ def test_get_active_user_or_raise_user_is_none(auth_service,
         auth_service._get_active_user_from_refresh_token_or_raise("some-token")
 
 
-def test_get_active_user_or_raise_user_not_capable(auth_service, fake_user_repo, fake_token_service):
+def test_get_active_user_or_raise_user_not_capable(auth_service, user_repo, fake_token_service):
     user_id = str(uuid4())
     fake_token_service.token_to_return = RefreshToken(
         id=user_id,
@@ -160,7 +128,7 @@ def test_get_active_user_or_raise_user_not_capable(auth_service, fake_user_repo,
         created_at=datetime.now(timezone.utc)
     )
 
-    fake_user_repo.create_user(
+    user_repo.create_user(
         User(
             id=user_id,
             username="some_username",
@@ -176,10 +144,10 @@ def test_get_active_user_or_raise_user_not_capable(auth_service, fake_user_repo,
         auth_service._get_active_user_from_refresh_token_or_raise("some-token")
 
 
-def test_login_happy_path(auth_service, fake_user_repo, fake_token_service):
+def test_login_happy_path(auth_service, user_repo, fake_token_service):
     user_id = str(uuid4())
     password = "SomePassword1!"
-    fake_user_repo.create_user(
+    user_repo.create_user(
         User(
             id=user_id,
             username="some_username",
@@ -197,13 +165,13 @@ def test_login_happy_path(auth_service, fake_user_repo, fake_token_service):
     assert fake_token_service.generate_calls == [(user_id, "some_username", "user")]
 
 
-def test_login_raises_when_user_not_found(auth_service, fake_user_repo):
+def test_login_raises_when_user_not_found(auth_service, user_repo):
     with pytest.raises(NotAuthenticatedException):
         auth_service.login("nieistniejacy@gmail.com", "cokolwiek")
 
 
-def test_login_raises_when_user_not_active(auth_service, fake_user_repo):
-    fake_user_repo.create_user(User(
+def test_login_raises_when_user_not_active(auth_service, user_repo):
+    user_repo.create_user(User(
         id=str(uuid4()), username="Broski", email="x@gmail.com",
         password_hash=HashingService.hash_password("Password1!"),
         account_state=AccountState.pending_removal,
@@ -213,8 +181,8 @@ def test_login_raises_when_user_not_active(auth_service, fake_user_repo):
         auth_service.login("x@gmail.com", "Password1!")
 
 
-def test_login_raises_when_password_invalid(auth_service, fake_user_repo):
-    fake_user_repo.create_user(User(
+def test_login_raises_when_password_invalid(auth_service, user_repo):
+    user_repo.create_user(User(
         id=str(uuid4()), username="Broski", email="x@gmail.com",
         password_hash=HashingService.hash_password("Password1!"),
         account_state=AccountState.active,
@@ -223,11 +191,11 @@ def test_login_raises_when_password_invalid(auth_service, fake_user_repo):
     with pytest.raises(NotAuthenticatedException):
         auth_service.login("x@gmail.com", password="IncorrectPassword1!")
 
-def test_login_password_rehash_when_needed(auth_service, fake_user_repo, monkeypatch):
+def test_login_password_rehash_when_needed(auth_service, user_repo, monkeypatch):
     # Arrange
     user_id = str(uuid4())
     old_hash = HashingService.hash_password("Password1!")
-    fake_user_repo.create_user(User(
+    user_repo.create_user(User(
         id=user_id, username="Broski", email="x@gmail.com",
         password_hash=old_hash,
         account_state=AccountState.active,
@@ -243,12 +211,12 @@ def test_login_password_rehash_when_needed(auth_service, fake_user_repo, monkeyp
     auth_service.login("x@gmail.com", "Password1!")
 
     # Assert
-    updated_user = fake_user_repo.get_user_by_id(user_id)
+    updated_user = user_repo.get_user_by_id(user_id)
     assert updated_user.password_hash != old_hash
 
-def test_logout(auth_service, fake_user_repo, fake_token_service):
+def test_logout(auth_service, user_repo, fake_token_service):
     user_id = str(uuid4())
-    fake_user_repo.create_user(User(
+    user_repo.create_user(User(
         id=user_id, username="Broski", email="x@gmail.com",
         password_hash=HashingService.hash_password("Password1!"),
         account_state=AccountState.active,
@@ -270,11 +238,11 @@ def test_logout(auth_service, fake_user_repo, fake_token_service):
 
 
 def test_logout_all_happy_path(auth_service,
-                               fake_user_repo,
+                               user_repo,
                                fake_token_service,
                                monkeypatch):
     user_id = str(uuid4())
-    fake_user_repo.create_user(User(
+    user_repo.create_user(User(
         id=user_id, username="Broski", email="x@gmail.com",
         password_hash=HashingService.hash_password("Password1!"),
         account_state=AccountState.active,
@@ -291,9 +259,9 @@ def test_logout_all_happy_path(auth_service,
 
     assert fake_token_service.revoke_all_calls == [user_id]
 
-def test_refresh_token_pair_happy_path(auth_service, fake_user_repo, fake_token_service):
+def test_refresh_token_pair_happy_path(auth_service, user_repo, fake_token_service):
     user_id = str(uuid4())
-    fake_user_repo.create_user(User(
+    user_repo.create_user(User(
         id=user_id, username="Broski", email="x@gmail.com",
         password_hash=HashingService.hash_password("Password1!"),
         account_state=AccountState.active,

@@ -8,37 +8,6 @@ from services.exceptions import (InvalidPasswordException,
                                  UserAlreadyRegisteredException)
 
 
-class FakeUserRepository:
-    def __init__(self) -> None:
-        self.users: dict[str, User] = {}
-
-    def create_user(self, user: User) -> None:
-        self.users[user.id] = user
-
-    def update_user(self, user: User) -> None:
-        if self.users.get(user.id) is None:
-            raise ValueError
-        self.users[user.id] = user
-
-    def get_user_by_id(self, u_id: str) -> User | None:
-        return self.users.get(u_id)
-
-    def get_user_by_username(self, username: str) -> User | None:
-        for user in self.users.values():
-            if user.username == username:
-                return user
-
-    def get_user_by_email(self, email: str) -> User | None:
-        for user in self.users.values():
-            if user.email == email.lower():
-                return user
-
-
-@pytest.fixture
-def user_repo():
-    return FakeUserRepository()
-
-
 @pytest.fixture
 def user_service(user_repo):
     return UserService(user_repo)

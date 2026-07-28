@@ -1,7 +1,6 @@
 import os
 import smtplib
 from typing import Protocol
-
 from services.config import SMTP_HOST, SMTP_PORT, SMTP_EMAIL
 
 

@@ -27,18 +27,8 @@ if __name__ == '__main__':
             email VARCHAR(120) NOT NULL UNIQUE,
             password_hash VARCHAR(256) NOT NULL,
             account_state ENUM('active', 'pending_removal', 'removed') NOT NULL DEFAULT 'active',
+            role VARCHAR(20) NOT NULL DEFAULT 'user',
             created_at DATETIME NOT NULL
-        );
-    """)
-
-    conn_cursor.execute("""
-        CREATE TABLE user_roles (
-            user_id VARCHAR(36) PRIMARY KEY,
-            role VARCHAR(20) NOT NULL,
-    
-            FOREIGN KEY (user_id)
-                REFERENCES users(id)
-                ON DELETE CASCADE
         );
     """)
 
