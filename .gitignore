@@ -1,0 +1,20 @@
+# venv
+.venv
+**/.env
+**/.env.*
+!**/.env.example
+
+# ide
+.idea
+.vscode
+
+# tests
+.pytest_cache
+htmlcov
+.coverage
+
+# python
+**/__pycache__
+
+# macos
+.DS_Store
