@@ -4,7 +4,8 @@ from uuid import uuid4
 from datetime import datetime, timezone
 from repos.user_repository import User, AccountState, UserRepositoryProtocol
 from services.exceptions import (InvalidPasswordException,
-                                 UserAlreadyRegisteredException)
+                                 UserAlreadyRegisteredException,
+                                 UserNotFoundException)
 from services.hashing_utils import HashingService
 from services.password_validator import is_password_valid
 from repos.user_repository import UserRepositoryProtocol
@@ -15,6 +16,12 @@ class UserServiceProtocol(Protocol):
                       username: str,
                       email: str,
                       password: str) -> User:
+        ...
+
+    def update_email(self, user_id: str, new_email: str) -> User:
+        ...
+    
+    def update_username(self, user_id: str, new_username: str) -> User:
         ...
 
 
@@ -46,3 +53,28 @@ class UserService:
         self._user_repo.create_user(new_user)
 
         return new_user
+
+    def update_email(self, user_id: str, new_email: str) -> User:
+        user: User | None = self._user_repo.get_user_by_id(user_id)
+        if user is None:
+            raise UserNotFoundException()
+
+        user_by_email: User | None = self._user_repo.get_user_by_email(new_email)
+        if user_by_email is not None and user_by_email.id != user.id:
+            raise UserAlreadyRegisteredException()
+
+        user.email = new_email.lower()
+        self._user_repo.update_user(user)
+
+    
+    def update_username(self, user_id: str, new_username: str) -> User:
+        user: User | None = self._user_repo.get_user_by_id(user_id)
+        if user is None:
+            raise UserNotFoundException()
+
+        user_by_username: User | None = self._user_repo.get_user_by_username(new_username)
+        if user_by_username is not None and user_by_username.id != user.id:
+            raise UserAlreadyRegisteredException()
+
+        user.username = new_username
+        self._user_repo.update_user(user)

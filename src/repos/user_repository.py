@@ -122,7 +122,7 @@ class UserRepository:
 
     def get_user_by_email(self, email: str) -> User | None:
         stmt = (select(UserModel)
-                .where(UserModel.email == email))
+                .where(UserModel.email == email.lower()))
         user = self._session.scalar(stmt)
 
         if user is None:

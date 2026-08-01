@@ -6,3 +6,6 @@ class InvalidPasswordException(Exception):
 
 class UserAlreadyRegisteredException(Exception):
     ...
+
+class UserNotFoundException(Exception):
+    ...

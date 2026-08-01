@@ -1,4 +1,5 @@
 from datetime import datetime
+from http.client import TOO_EARLY
 from typing import Annotated
 from redis import Redis
 from fastapi import FastAPI, Depends, HTTPException, status
@@ -12,7 +13,7 @@ from repos.user_repository import User, AccountState, UserRepository
 from repos.refresh_token_repository import RefreshTokenRepository
 from repos.ban_repository import BanRepository
 from services.auth_service import UserAuthService
-from services.exceptions import InvalidPasswordException, NotAuthenticatedException, UserAlreadyRegisteredException
+from services.exceptions import InvalidPasswordException, NotAuthenticatedException, UserAlreadyRegisteredException, UserNotFoundException
 from services.user_service import UserService
 from services.config import (MIN_PASSWORD_LENGTH, 
                              MAX_PASSWORD_LENGTH,
@@ -96,6 +97,28 @@ def get_user_auth_service(user_repo: UserRepository = Depends(get_user_repo),
     return UserAuthService(user_repo,
                            token_service,
                            user_capability_checker)
+
+
+def get_user_from_refresh_token(credentials: Annotated[HTTPAuthorizationCredentials, Depends(http_bearer)],
+                                user_auth_service: Annotated[UserAuthService, Depends(get_user_auth_service)]):
+    try:
+        return user_auth_service.get_active_user_from_refresh_token_or_raise(credentials.credentials)
+    except NotAuthenticatedException:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        )
+
+
+def get_user_from_access_token(credentials: Annotated[HTTPAuthorizationCredentials, Depends(http_bearer)],
+                                user_auth_service: Annotated[UserAuthService, Depends(get_user_auth_service)]):
+    try:
+        return user_auth_service.get_active_user_from_access_token_or_raise(credentials.credentials)
+    except NotAuthenticatedException:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+        )
 
 
 class UserRegisterRequest(BaseModel):
@@ -204,6 +227,44 @@ def get_user(username: str,
                             detail="User not found")
 
     return UserResponseModel.model_validate(user, from_attributes=True)
+
+
+class UpdateEmailRequest(BaseModel):
+    new_email: EmailStr = Field(max_length=120)
+
+
+class UpdateUsernameRequest(BaseModel):
+    new_username: str = Field(min_length=3, max_length=50)
+
+
+@app.patch("/users/email", response_model=UserResponseModel)
+def update_email(
+    body: UpdateEmailRequest,
+    user: Annotated[User, Depends(get_user_from_access_token)],
+    user_service: Annotated[UserService, Depends(get_user_service)],
+):
+    try:
+        updated_user = user_service.update_email(user.id, body.new_email)
+    except UserNotFoundException:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    except UserAlreadyRegisteredException:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email is already taken")
+    return updated_user
+
+
+@app.patch("/users/username", response_model=UserResponseModel)
+def update_username(
+    body: UpdateUsernameRequest,
+    user: Annotated[User, Depends(get_user_from_access_token)],
+    user_service: Annotated[UserService, Depends(get_user_service)],
+):
+    try:
+        updated_user = user_service.update_username(user.id, body.new_username)
+    except UserNotFoundException:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    except UserAlreadyRegisteredException:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username is already taken")
+    return updated_user
 
 
 # TODO: login, 
