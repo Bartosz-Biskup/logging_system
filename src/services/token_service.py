@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from redis import Redis
 from repos.refresh_token_repository import (RefreshToken,
                                             RefreshTokenRepositoryProtocol)
-from services.JWT_utils import JWTTokenIssuer, RefreshTokenPayload
+from services.JWT_utils import AccessTokenPayload, JWTTokenIssuer, RefreshTokenPayload
 from services.exceptions import NotAuthenticatedException
 
 
@@ -28,6 +28,9 @@ class TokenServiceProtocol(Protocol):
         ...
 
     def get_valid_refresh_token_or_raise(self, refresh_token: str) -> RefreshToken:
+        ...
+
+    def get_user_id_from_access_token_or_raise(self, access_token: str) -> str:
         ...
 
 
@@ -72,6 +75,17 @@ class TokenService:
             raise NotAuthenticatedException("Invalid or revoked refresh token.")
 
         return token
+
+    def get_user_id_from_access_token_or_raise(self, access_token: str) -> str:
+        try:
+            token: AccessTokenPayload = JWTTokenIssuer.decode_access_token(access_token)
+        except ValueError:
+            raise NotAuthenticatedException("Invalid access token.")
+
+        if self._access_token_blacklist.is_access_token_blacklisted(token.jti):
+            raise NotAuthenticatedException()
+
+        return token.sub
 
     def generate_token_pair_for_user(self, user_id: str, username: str, role: str) -> TokenPair:
         jti: str = str(uuid4())

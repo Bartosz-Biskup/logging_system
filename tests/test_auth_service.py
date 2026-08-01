@@ -49,6 +49,11 @@ class FakeTokenService:
     def revoke_all_user_refresh_tokens(self, user_id: str) -> None:
         self.revoke_all_calls.append(user_id)
 
+    def get_user_id_from_access_token_or_raise(self, access_token: str) -> str:
+        if self.should_raise_invalid:
+            raise NotAuthenticatedException()
+        return self.token_to_return.user_id if self.token_to_return else "unknown"
+
 
 class FakeCapabilityChecker:
     def __init__(self, user_repo) -> None:
@@ -98,7 +103,7 @@ def test_get_active_user_or_raise_happy_path(auth_service, user_repo, fake_token
         )
     )
 
-    res = auth_service._get_active_user_from_refresh_token_or_raise("some-token")
+    res = auth_service.get_active_user_from_refresh_token_or_raise("some-token")
 
     assert res.id == user_id
 
@@ -115,7 +120,7 @@ def test_get_active_user_or_raise_user_is_none(auth_service,
     )
 
     with pytest.raises(NotAuthenticatedException):
-        auth_service._get_active_user_from_refresh_token_or_raise("some-token")
+        auth_service.get_active_user_from_refresh_token_or_raise("some-token")
 
 
 def test_get_active_user_or_raise_user_not_capable(auth_service, user_repo, fake_token_service):
@@ -141,7 +146,7 @@ def test_get_active_user_or_raise_user_not_capable(auth_service, user_repo, fake
     )
 
     with pytest.raises(NotAuthenticatedException):
-        auth_service._get_active_user_from_refresh_token_or_raise("some-token")
+        auth_service.get_active_user_from_refresh_token_or_raise("some-token")
 
 
 def test_login_happy_path(auth_service, user_repo, fake_token_service):
@@ -286,12 +291,43 @@ def test_refresh_token_pair_happy_path(auth_service, user_repo, fake_token_servi
     assert res == token_pair
 
 
+def test_get_active_user_from_access_token_happy_path(auth_service, user_repo, fake_token_service):
+    user_id = str(uuid4())
+    user_repo.create_user(User(
+        id=user_id, username="Broski", email="x@gmail.com",
+        password_hash="hash", account_state=AccountState.active,
+        role="user", created_at=datetime.now(timezone.utc),
+    ))
+    fake_token_service.token_to_return = RefreshToken(
+        id=str(uuid4()), user_id=user_id,
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        revoked_at=None, created_at=datetime.now(timezone.utc),
+    )
+
+    result = auth_service.get_active_user_from_access_token_or_raise("valid-access-token")
+
+    assert result.id == user_id
 
 
+def test_get_active_user_from_access_token_invalid_token(auth_service, fake_token_service):
+    fake_token_service.should_raise_invalid = True
+
+    with pytest.raises(NotAuthenticatedException):
+        auth_service.get_active_user_from_access_token_or_raise("invalid-token")
 
 
+def test_get_active_user_from_access_token_user_not_capable(auth_service, user_repo, fake_token_service):
+    user_id = str(uuid4())
+    user_repo.create_user(User(
+        id=user_id, username="Broski", email="x@gmail.com",
+        password_hash="hash", account_state=AccountState.pending_removal,
+        role="user", created_at=datetime.now(timezone.utc),
+    ))
+    fake_token_service.token_to_return = RefreshToken(
+        id=str(uuid4()), user_id=user_id,
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=5),
+        revoked_at=None, created_at=datetime.now(timezone.utc),
+    )
 
-
-
-
-
+    with pytest.raises(NotAuthenticatedException):
+        auth_service.get_active_user_from_access_token_or_raise("valid-token")

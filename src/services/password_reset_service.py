@@ -63,7 +63,7 @@ class PasswordResetService:
 
     def generate_and_send_password_reset_link(self, user_email: str) -> None:
         user: User = self._get_capable_user_by_email_or_raise(user_email)
-        last_link: PasswordResetRequest = self._password_reset_repo.get_last_user_reset_request(user.id)
+        last_link: PasswordResetRequest | None = self._password_reset_repo.get_last_user_reset_request(user.id)
         
         now = datetime.now(timezone.utc)
         if last_link is None:

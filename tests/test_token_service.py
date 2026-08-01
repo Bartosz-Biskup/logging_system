@@ -244,3 +244,50 @@ def test_revoke_all_users_refresh_token(token_service, token_repo, blacklist):
     assert token_repo.get_refresh_token_by_id(another_token_jti).revoked_at is None
     assert not blacklist.is_access_token_blacklisted(another_token_jti)
 
+
+def test_get_user_id_from_access_token_happy_path(token_service, blacklist, monkeypatch):
+    # Arrange
+    class DummyPayload:
+        pass
+    DummyPayload.jti = "some-jti"
+    DummyPayload.sub = "user-123"
+
+    monkeypatch.setattr(
+        "services.token_service.JWTTokenIssuer.decode_access_token",
+        lambda token: DummyPayload(),
+    )
+
+    # Act
+    user_id = token_service.get_user_id_from_access_token_or_raise("valid-access-token")
+
+    # Assert
+    assert user_id == "user-123"
+
+
+def test_get_user_id_from_access_token_invalid(token_service, monkeypatch):
+    monkeypatch.setattr(
+        "services.token_service.JWTTokenIssuer.decode_access_token",
+        lambda token: (_ for _ in ()).throw(ValueError()),
+    )
+
+    with pytest.raises(NotAuthenticatedException):
+        token_service.get_user_id_from_access_token_or_raise("invalid-token")
+
+
+def test_get_user_id_from_access_token_blacklisted(token_service, blacklist, monkeypatch):
+    # Arrange
+    class DummyPayload:
+        pass
+    DummyPayload.jti = "blacklisted-jti"
+    DummyPayload.sub = "user-123"
+
+    monkeypatch.setattr(
+        "services.token_service.JWTTokenIssuer.decode_access_token",
+        lambda token: DummyPayload(),
+    )
+    blacklist.blacklist_access_token("blacklisted-jti")
+
+    # Act & Assert
+    with pytest.raises(NotAuthenticatedException):
+        token_service.get_user_id_from_access_token_or_raise("blacklisted-token")
+
