@@ -9,3 +9,6 @@ class UserAlreadyRegisteredException(Exception):
 
 class UserNotFoundException(Exception):
     ...
+
+class MFAException(Exception):
+    ...

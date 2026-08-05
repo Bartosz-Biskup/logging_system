@@ -12,8 +12,11 @@ from pydantic import BaseModel, EmailStr, Field
 from repos.user_repository import User, AccountState, UserRepository
 from repos.refresh_token_repository import RefreshTokenRepository
 from repos.ban_repository import BanRepository
+from repos.password_reset_repo import PasswordResetRequestRepository
+from repos.mfa_setup import MfaSetupRepository
+from repos.mfa_login_request import MfaLoginRequestRepository
 from services.auth_service import UserAuthService
-from services.exceptions import InvalidPasswordException, NotAuthenticatedException, UserAlreadyRegisteredException, UserNotFoundException
+from services.exceptions import InvalidPasswordException, MFAException, NotAuthenticatedException, UserAlreadyRegisteredException, UserNotFoundException
 from services.user_service import UserService
 from services.config import (MIN_PASSWORD_LENGTH, 
                              MAX_PASSWORD_LENGTH,
@@ -21,6 +24,10 @@ from services.config import (MIN_PASSWORD_LENGTH,
 from services.token_service import TokenPair, TokenService, AccessTokenBlacklist
 from services.ban_service import BanService
 from services.user_capability_checker_service import UserCapabilityCheckerService
+from services.mail_sender_service import MailSender
+from services.password_reset_service import PasswordResetService
+from services.mfa_service import MFAService, MfaLoginCode
+from services.message_sender import MessageSender
 
 
 app = FastAPI()
@@ -91,12 +98,51 @@ def get_user_capability_checker_service(user_repo: UserRepository = Depends(get_
     return UserCapabilityCheckerService(user_repo, ban_service)
 
 
+def get_password_reset_repo(db: Session = Depends(get_db)):
+    return PasswordResetRequestRepository(db)
+
+
+def get_password_reset_service(password_reset_repo: PasswordResetRequestRepository = Depends(get_password_reset_repo),
+                               user_repo: UserRepository = Depends(get_user_repo),
+                               capability_checker: UserCapabilityCheckerService = Depends(get_user_capability_checker_service)):
+    return PasswordResetService(password_reset_repo,
+                                user_repo,
+                                MailSender(),
+                                capability_checker)
+
+
 def get_user_auth_service(user_repo: UserRepository = Depends(get_user_repo),
                           token_service: TokenService = Depends(get_token_service),
                           user_capability_checker: UserCapabilityCheckerService = Depends(get_user_capability_checker_service)):
     return UserAuthService(user_repo,
                            token_service,
                            user_capability_checker)
+
+
+def get_mfa_setup_repo(db: Session = Depends(get_db)):
+    return MfaSetupRepository(db)
+
+
+def get_mfa_login_request_repo(db: Session = Depends(get_db)):
+    return MfaLoginRequestRepository(db)
+
+
+def get_message_sender():
+    return MessageSender()
+
+
+def get_mfa_service(
+    mfa_setup_repo: MfaSetupRepository = Depends(get_mfa_setup_repo),
+    mfa_login_request_repo: MfaLoginRequestRepository = Depends(get_mfa_login_request_repo),
+    user_capability_checker: UserCapabilityCheckerService = Depends(get_user_capability_checker_service),
+    message_sender: MessageSender = Depends(get_message_sender),
+):
+    return MFAService(
+        mfa_setup_repo,
+        mfa_login_request_repo,
+        user_capability_checker,
+        message_sender,
+    )
 
 
 def get_user_from_refresh_token(credentials: Annotated[HTTPAuthorizationCredentials, Depends(http_bearer)],
@@ -237,6 +283,11 @@ class UpdateUsernameRequest(BaseModel):
     new_username: str = Field(min_length=3, max_length=50)
 
 
+class UpdatePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH)
+    new_password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH)
+
+
 @app.patch("/users/email", response_model=UserResponseModel)
 def update_email(
     body: UpdateEmailRequest,
@@ -266,12 +317,75 @@ def update_username(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username is already taken")
     return updated_user
 
+@app.patch("/users/password", response_model=UserResponseModel)
+def update_password(
+    body: UpdatePasswordRequest,
+    user: Annotated[User, Depends(get_user_from_access_token)],
+    user_auth_service: Annotated[UserAuthService, Depends(get_user_auth_service)]
+):
+    try:
+        updated_user: User = user_auth_service.change_password(user, 
+                                                               body.current_password, 
+                                                               body.new_password)
+    except NotAuthenticatedException:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail="User unauthorized")
+    except InvalidPasswordException:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                            detail="Invalid new password. Check our password guidelines.")
 
-# TODO: login, 
-# logout, 
-# logout-all, 
-# rotate_tokens, 
-# get_user, 
-# update email and username, 
-# set new password,
-# reset password (generate link and reset )
+    return updated_user
+
+
+class RequestPasswordResetBody(BaseModel):
+    email: EmailStr = Field(max_length=120)
+
+
+class ResetPasswordBody(BaseModel):
+    reset_request_id: str = Field(min_length=36, max_length=36)
+    new_password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH)
+
+
+@app.post("/users/password-reset/request", status_code=status.HTTP_200_OK)
+def request_password_reset(body: RequestPasswordResetBody,
+                           password_reset_service: Annotated[PasswordResetService, Depends(get_password_reset_service)]):
+    try:
+        password_reset_service.generate_and_send_password_reset_link(body.email)
+    except ValueError:
+        # Swallow on purpose so we always return the same generic message
+        # (prevents email enumeration)
+        pass
+
+    return {
+        "message": "If the account exists, a password reset link has been sent"
+    }
+
+
+@app.post("/users/password-reset/reset", status_code=status.HTTP_200_OK)
+def reset_password(body: ResetPasswordBody,
+                   password_reset_service: Annotated[PasswordResetService, Depends(get_password_reset_service)]):
+    try:
+        password_reset_service.reset_password_with_reset_request(body.reset_request_id,
+                                                                 body.new_password)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail="Invalid or expired reset request")
+    except InvalidPasswordException:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                            detail="Invalid new password. Check our password guidelines.")
+
+    return {
+        "message": "Password has been reset successfully"
+    }
+
+@app.post("/mfa/confirm-login")
+def confirm_mfa(body: MfaLoginCode,
+                mfa_service: Annotated[MFAService, Depends(get_mfa_service)]
+                ):
+    try:
+        mfa_service.confirm_login_code(body)
+    except MFAException:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                            detail="Invalid login code")
+
+    return {"message": "MFA login confirmed"}

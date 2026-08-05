@@ -331,3 +331,34 @@ def test_get_active_user_from_access_token_user_not_capable(auth_service, user_r
 
     with pytest.raises(NotAuthenticatedException):
         auth_service.get_active_user_from_access_token_or_raise("valid-token")
+
+
+def test_verify_password_or_reject_happy_path(auth_service, user_repo):
+    password = "SomePassword1!"
+    user_id = str(uuid4())
+    user_repo.create_user(User(
+        id=user_id, username="Broski", email="x@gmail.com",
+        password_hash=HashingService.hash_password(password),
+        account_state=AccountState.active,
+        role="user", created_at=datetime.now(timezone.utc)
+    ))
+
+    user = user_repo.get_user_by_id(user_id)
+
+    auth_service.verify_password_or_reject(user, password)
+
+
+def test_verify_password_or_reject_raises_on_wrong_password(auth_service, user_repo):
+    password = "SomePassword1!"
+    user_id = str(uuid4())
+    user_repo.create_user(User(
+        id=user_id, username="Broski", email="x@gmail.com",
+        password_hash=HashingService.hash_password(password),
+        account_state=AccountState.active,
+        role="user", created_at=datetime.now(timezone.utc)
+    ))
+
+    user = user_repo.get_user_by_id(user_id)
+
+    with pytest.raises(NotAuthenticatedException):
+        auth_service.verify_password_or_reject(user, "WrongPassword1!")

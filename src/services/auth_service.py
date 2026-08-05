@@ -2,8 +2,9 @@ from typing import Protocol, NoReturn
 from services.token_service import TokenServiceProtocol, TokenPair
 from repos.user_repository import UserRepositoryProtocol, User
 from services.hashing_utils import HashingService
-from services.exceptions import NotAuthenticatedException
+from services.exceptions import InvalidPasswordException, NotAuthenticatedException
 from services.user_capability_checker_service import UserCapabilityCheckerServiceProtocol
+from services.password_validator import is_password_valid
 
 
 class UserAuthServiceProtocol(Protocol):
@@ -23,6 +24,9 @@ class UserAuthServiceProtocol(Protocol):
         ...
 
     def get_active_user_from_access_token_or_raise(self, access_token: str) -> User:
+        ...
+
+    def verify_password_or_reject(self, user: User, password: str) -> None:
         ...
 
 
@@ -66,6 +70,10 @@ class UserAuthService:
         except NotAuthenticatedException:
             self._raise_authentication_failure()
 
+    def verify_password_or_reject(self, user: User, password: str) -> None:
+        if not HashingService.verify_password_hash(user.password_hash, password):
+            self._raise_authentication_failure()
+
     def login(self, email: str, password: str) -> TokenPair:
         user = self._get_user_by_email_or_reject(email)
         self._ensure_user_capable_or_reject(user)
@@ -89,3 +97,23 @@ class UserAuthService:
     def refresh_token_pair(self, refresh_token: str) -> TokenPair:
         user: User = self.get_active_user_from_refresh_token_or_raise(refresh_token)
         return self._token_service.rotate_token_pair(refresh_token, user.id, user.username, user.role)
+
+    def change_password(self,
+                        user: User,
+                        current_password: str,
+                        new_password: str) -> User:
+        self._ensure_user_capable_or_reject(user)
+
+        if not HashingService.verify_password_hash(user.password_hash, current_password):
+            raise NotAuthenticatedException("Invalid current password provided")
+
+        if not is_password_valid(new_password):
+            raise InvalidPasswordException("Invalid new password")
+
+        user.password_hash = HashingService.hash_password(new_password)
+        self._user_repo.update_user(user)
+        return user
+
+
+
+        

@@ -65,8 +65,8 @@ class UserService:
 
         user.email = new_email.lower()
         self._user_repo.update_user(user)
+        return self._user_repo.get_user_by_id(user_id)
 
-    
     def update_username(self, user_id: str, new_username: str) -> User:
         user: User | None = self._user_repo.get_user_by_id(user_id)
         if user is None:
@@ -78,3 +78,4 @@ class UserService:
 
         user.username = new_username
         self._user_repo.update_user(user)
+        return self._user_repo.get_user_by_id(user_id)

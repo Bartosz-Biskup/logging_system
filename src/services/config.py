@@ -15,11 +15,14 @@ PASSWORD_RESET_REQUEST_EXPIRATION_TIME_HOURS: Final[int] = 1
 PASSWORD_RESET_REQUEST_DELAY_HOURS: Final[int] = 24
 
 # smtp
-SMTP_HOST: Final[str] = ""
+SMTP_HOST: Final[str] = "smtp.gmail.com"
 SMTP_PORT: Final[int] = 587
-SMTP_EMAIL: Final[str] = ""
+SMTP_EMAIL: Final[str] = "bartoszbiskup1234@gmail.com"
 
 # passwords
 MIN_PASSWORD_LENGTH: Final[int] = 8
 MAX_PASSWORD_LENGTH: Final[int] = 255
 REQUIRE_SPECIAL_CHARACTER: Final[bool] = True
+
+# mfa
+MFA_REQUEST_EXPIRATION_TIME_MINUTES: Final[int] = 3
