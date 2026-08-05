@@ -15,7 +15,7 @@ from repos.ban_repository import BanRepository
 from repos.password_reset_repo import PasswordResetRequestRepository
 from repos.mfa_setup import MfaSetupRepository
 from repos.mfa_login_request import MfaLoginRequestRepository
-from services.auth_service import UserAuthService
+from services.auth_service import UserAuthService, LoginResponse, LoginStatus
 from services.exceptions import InvalidPasswordException, MFAException, NotAuthenticatedException, UserAlreadyRegisteredException, UserNotFoundException
 from services.user_service import UserService
 from services.config import (MIN_PASSWORD_LENGTH, 
@@ -111,14 +111,6 @@ def get_password_reset_service(password_reset_repo: PasswordResetRequestReposito
                                 capability_checker)
 
 
-def get_user_auth_service(user_repo: UserRepository = Depends(get_user_repo),
-                          token_service: TokenService = Depends(get_token_service),
-                          user_capability_checker: UserCapabilityCheckerService = Depends(get_user_capability_checker_service)):
-    return UserAuthService(user_repo,
-                           token_service,
-                           user_capability_checker)
-
-
 def get_mfa_setup_repo(db: Session = Depends(get_db)):
     return MfaSetupRepository(db)
 
@@ -143,6 +135,16 @@ def get_mfa_service(
         user_capability_checker,
         message_sender,
     )
+
+
+def get_user_auth_service(user_repo: UserRepository = Depends(get_user_repo),
+                          token_service: TokenService = Depends(get_token_service),
+                          user_capability_checker: UserCapabilityCheckerService = Depends(get_user_capability_checker_service),
+                          mfa_service: MFAService = Depends(get_mfa_service)):
+    return UserAuthService(user_repo,
+                           token_service,
+                           user_capability_checker,
+                           mfa_service)
 
 
 def get_user_from_refresh_token(credentials: Annotated[HTTPAuthorizationCredentials, Depends(http_bearer)],
@@ -209,16 +211,14 @@ class UserLoginRequest(BaseModel):
                           max_length=MAX_PASSWORD_LENGTH)
 
 
-@app.post("/users/login", response_model=TokenPair)
+@app.post("/users/login", response_model=LoginResponse)
 def login(body: UserLoginRequest,
           user_auth_service: Annotated[UserAuthService, Depends(get_user_auth_service)]):
     try:
-        tokens: TokenPair = user_auth_service.login(body.email, body.password)
+        return user_auth_service.login(body.email, body.password)
     except NotAuthenticatedException:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail="Invalid email or password")
-
-    return tokens
 
 
 @app.post("/users/logout")
@@ -378,14 +378,37 @@ def reset_password(body: ResetPasswordBody,
         "message": "Password has been reset successfully"
     }
 
-@app.post("/mfa/confirm-login")
-def confirm_mfa(body: MfaLoginCode,
-                mfa_service: Annotated[MFAService, Depends(get_mfa_service)]
-                ):
+@app.post("/users/login/mfa", response_model=TokenPair)
+def confirm_mfa_login(body: MfaLoginCode,
+                      user_auth_service: Annotated[UserAuthService, Depends(get_user_auth_service)]):
     try:
-        mfa_service.confirm_login_code(body)
+        return user_auth_service.confirm_mfa(body)
     except MFAException:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                            detail="Invalid login code")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="Invalid or expired MFA code",
+        )
+    except UserNotFoundException:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
 
-    return {"message": "MFA login confirmed"}
+
+class MfaSetupRequst(BaseModel):
+    phone_number: str
+
+
+@app.post("/mfa/setup", status_code=status.HTTP_201_CREATED)
+def setup_mfa(body: MfaSetupRequst,
+              user: Annotated[User, Depends(get_user_from_access_token)],
+              mfa_service: Annotated[MFAService, Depends(get_mfa_service)]):
+    try:
+        mfa_service.setup_mfa(user.id, body.phone_number)
+    except MFAException as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,
+                            detail=str(e))
+
+    return {
+        "message": "MFA set up successfully"
+    }

@@ -1,5 +1,5 @@
 from db_and_models.user import AccountState
-from services.auth_service import UserAuthService
+from services.auth_service import UserAuthService, LoginResponse, LoginStatus
 from repos.user_repository import User
 from services.hashing_utils import HashingService
 import pytest
@@ -7,10 +7,37 @@ from datetime import datetime, timezone, timedelta
 from uuid import uuid4
 from services.config import HASHING_TIME_COST
 from argon2 import PasswordHasher
-
 from services.token_service import TokenPair
 from repos.refresh_token_repository import RefreshToken
 from services.exceptions import NotAuthenticatedException
+from services.mfa_service import MFAService, MfaLoginCode
+
+
+class FakeMfaService:
+    def __init__(self) -> None:
+        self._has_mfa: bool = False
+        self.login_code_to_return: MfaLoginCode = MfaLoginCode(
+            id=str(uuid4()), code=123456
+        )
+        self.user_id_to_return: str = ""
+
+    def set_has_mfa(self, value: bool) -> None:
+        self._has_mfa = value
+
+    def has_mfa(self, user_id: str) -> bool:
+        return self._has_mfa
+
+    def request_login_code(self, user_id: str) -> MfaLoginCode:
+        return self.login_code_to_return
+
+    def confirm_login_code(self, mfa_code: MfaLoginCode) -> str:
+        return self.user_id_to_return
+
+    def setup_mfa(self, user_id: str, phone_number: str):
+        ...
+
+    def remove_mfa(self, user_id: str):
+        ...
 
 
 class FakeTokenService:
@@ -77,8 +104,13 @@ def fake_capability_checker(user_repo):
     return FakeCapabilityChecker(user_repo)
 
 @pytest.fixture
-def auth_service(user_repo, fake_token_service, fake_capability_checker):
-    return UserAuthService(user_repo, fake_token_service, fake_capability_checker)
+def fake_mfa_service():
+    return FakeMfaService()
+
+
+@pytest.fixture
+def auth_service(user_repo, fake_token_service, fake_capability_checker, fake_mfa_service):
+    return UserAuthService(user_repo, fake_token_service, fake_capability_checker, fake_mfa_service)
 
 
 def test_get_active_user_or_raise_happy_path(auth_service, user_repo, fake_token_service):
@@ -166,7 +198,9 @@ def test_login_happy_path(auth_service, user_repo, fake_token_service):
 
     res = auth_service.login("example@gmail.com", password)
 
-    assert isinstance(res, TokenPair)
+    assert isinstance(res, LoginResponse)
+    assert res.status == LoginStatus.authenticated
+    assert res.token_pair is not None
     assert fake_token_service.generate_calls == [(user_id, "some_username", "user")]
 
 

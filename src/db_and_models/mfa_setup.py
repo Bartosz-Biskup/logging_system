@@ -8,4 +8,4 @@ class MfaSetup(Base):
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id",
                                                                 ondelete="CASCADE"),
                                          primary_key=True)
-    user_phone_number: Mapped[str] = mapped_column(String(32), unique=True)
+    user_phone_number: Mapped[str] = mapped_column(String(16), unique=True)

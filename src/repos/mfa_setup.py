@@ -1,17 +1,25 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Protocol
-
+from re import fullmatch
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-
 from repos.exceptions import ObjectAlreadyExists, ObjectNotFoundException
 from db_and_models.mfa_setup import MfaSetup as MfaSetupModel
 
 
 class MfaSetup(BaseModel):
     user_id: str = Field(min_length=36, max_length=36)
-    user_phone_number: str = Field(max_length=32)
+    user_phone_number: str = Field(max_length=16)
+
+    @field_validator("user_phone_number", mode="after")
+    @classmethod
+    def validate_phone_number(cls, value: str) -> str:
+        pattern = r"^\+[1-9]\d{6,14}$"
+        if not fullmatch(pattern, value):
+            raise ValueError()
+
+        return value
 
     model_config = {
         "from_attributes": True

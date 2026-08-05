@@ -2,6 +2,7 @@ from typing import Protocol
 from uuid import uuid4
 from datetime import datetime, timezone, timedelta
 from random import randint
+from services.config import MFA_REQUEST_EXPIRATION_TIME_MINUTES
 from services.user_capability_checker_service import UserCapabilityCheckerServiceProtocol
 from services.message_sender import MessageSenderProtocol
 from services.hashing_utils import HashingService
@@ -9,9 +10,6 @@ from services.exceptions import MFAException, NotAuthenticatedException
 from repos.mfa_setup import MfaSetupRepositoryProtocol, MfaSetup
 from repos.mfa_login_request import MfaLoginRequestRepositoryProtocol, MfaLoginRequest
 from pydantic import BaseModel, Field
-
-
-CODE_EXPIRY_MINUTES = 5
 
 
 class MfaLoginCode(BaseModel):
@@ -33,7 +31,11 @@ class MFAServiceProtocol(Protocol):
                            user_id: str) -> MfaLoginCode:
         ...
 
-    def confirm_login_code(self, mfa_login_code: MfaLoginCode) -> None:
+    def confirm_login_code(self, mfa_login_code: MfaLoginCode) -> str:
+        ...
+
+    def has_mfa(self, 
+                user_id: str) -> bool:
         ...
 
 
@@ -57,10 +59,14 @@ class MFAService:
         if existing_setup is not None:
             raise MFAException("MFA is already set up for this user")
 
-        setup = MfaSetup(
-            user_id=user_id,
-            user_phone_number=phone_number
-        )
+        try:
+            setup = MfaSetup(
+                user_id=user_id,
+                user_phone_number=phone_number
+            )
+        except ValueError:
+            raise MFAException("Invalid phone number format")
+
         self._mfa_setup_repo.create_mfa_setup(setup)
         return setup
     
@@ -92,7 +98,7 @@ class MFAService:
             id=request_id,
             user_id=user_id,
             code_hash=code_hash,
-            expires_at=now + timedelta(minutes=CODE_EXPIRY_MINUTES),
+            expires_at=now + timedelta(minutes=MFA_REQUEST_EXPIRATION_TIME_MINUTES),
             confirmed_at=None,
             created_at=now
         )
@@ -106,7 +112,7 @@ class MFAService:
         return MfaLoginCode(id=request_id, code=code)
 
     def confirm_login_code(self, 
-                           mfa_login_code: MfaLoginCode) -> None:
+                           mfa_login_code: MfaLoginCode) -> str:
         request = self._mfa_login_repo.get_request_by_id(mfa_login_code.id)
         if request is None:
             raise MFAException("MFA login request not found")
@@ -125,3 +131,9 @@ class MFAService:
             raise MFAException("Invalid MFA login code")
 
         self._mfa_login_repo.confirm_request(request.id, now)
+        
+        return request.user_id
+
+    def has_mfa(self, 
+                user_id: str) -> bool:
+        return self._mfa_setup_repo.get_mfa_setup_by_user(user_id) is not None
