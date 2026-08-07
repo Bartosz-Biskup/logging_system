@@ -1,27 +1,35 @@
-if __name__ == '__main__':
-    from mysql.connector import connect
-    from dotenv import load_dotenv
-    from typing import Final
-    from os import getenv
+from mysql.connector import connect  # type: ignore[import-not-found]
+from mysql.connector.abstracts import MySQLConnectionAbstract
+from dotenv import load_dotenv
+from typing import Final
+from os import getenv
 
 
+def _get_db_password() -> str:
+    """Load .env and return the DB_PASSWORD, raising if not set."""
     load_dotenv(".env")
-    DB_PASSWORD: Final[str] = getenv("DB_PASSWORD")
-    if DB_PASSWORD is None:
-        raise ValueError("Password not read")
+    password: Final[str | None] = getenv("DB_PASSWORD")
+    if password is None:
+        raise ValueError("DB_PASSWORD not found in environment")
+    return password
 
 
-    connection = connect(
+def create_connection():
+    """Create and return a MySQL database connection."""
+    return connect(
         host="localhost",
         user="root",
-        password=DB_PASSWORD,
-        database="logging_system"
+        password=_get_db_password(),
+        database="logging_system",
     )
-    conn_cursor = connection.cursor()
 
 
-    conn_cursor.execute("""
-        CREATE TABLE users (
+def create_tables(connection) -> None:
+    """Create all application tables if they don't already exist."""
+    cursor = connection.cursor()
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS users (
             id VARCHAR(36) PRIMARY KEY,
             username VARCHAR(50) NOT NULL UNIQUE,
             email VARCHAR(120) NOT NULL UNIQUE,
@@ -32,8 +40,8 @@ if __name__ == '__main__':
         );
     """)
 
-    conn_cursor.execute("""
-        CREATE TABLE bans (
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS bans (
             id VARCHAR(36) PRIMARY KEY,
             user_id VARCHAR(36) NOT NULL,
             banned_at DATETIME NOT NULL,
@@ -41,65 +49,65 @@ if __name__ == '__main__':
             reason VARCHAR(255),
             banned_by VARCHAR(36),
             revoked_at DATETIME DEFAULT NULL,
-    
+
             FOREIGN KEY (user_id)
                 REFERENCES users(id)
                 ON DELETE CASCADE,
-    
+
             FOREIGN KEY (banned_by)
                 REFERENCES users(id)
                 ON DELETE SET NULL
         );
     """)
 
-    conn_cursor.execute("""
-        CREATE TABLE refresh_tokens (
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS refresh_tokens (
             id VARCHAR(36) PRIMARY KEY,
             user_id VARCHAR(36) NOT NULL,
             expires_at DATETIME NOT NULL,
             revoked_at DATETIME,
             created_at DATETIME NOT NULL,
-    
+
             FOREIGN KEY (user_id)
                 REFERENCES users(id)
                 ON DELETE CASCADE
         );
     """)
 
-    conn_cursor.execute("""
-        CREATE TABLE password_reset_requests (
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS password_reset_requests (
             id VARCHAR(36) PRIMARY KEY,
             user_id VARCHAR(36) NOT NULL,
             expires_at DATETIME NOT NULL,
             used_at DATETIME,
             created_at DATETIME NOT NULL,
-    
+
             FOREIGN KEY (user_id)
                 REFERENCES users(id)
                 ON DELETE CASCADE
         );
     """)
 
-    conn_cursor.execute("""
-        CREATE TABLE MFA_setups (
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS MFA_setups (
             user_id VARCHAR(36) PRIMARY KEY,
             user_phone_number VARCHAR(32) UNIQUE NOT NULL,
-    
+
             FOREIGN KEY (user_id)
                 REFERENCES users(id)
                 ON DELETE CASCADE
         );
     """)
 
-    conn_cursor.execute("""
-        CREATE TABLE MFA_login_requests (
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS MFA_login_requests (
             id VARCHAR(36) PRIMARY KEY,
             user_id VARCHAR(36) NOT NULL,
             code_hash VARCHAR(256) NOT NULL,
             expires_at DATETIME NOT NULL,
             confirmed_at DATETIME,
             created_at DATETIME NOT NULL,
-    
+
             FOREIGN KEY (user_id)
                 REFERENCES users(id)
                 ON DELETE CASCADE
@@ -107,5 +115,17 @@ if __name__ == '__main__':
     """)
 
     connection.commit()
-    conn_cursor.close()
-    connection.close()
+    cursor.close()
+
+
+def init_db() -> None:
+    """Full database initialisation: connect + create tables."""
+    connection = create_connection()
+    try:
+        create_tables(connection)
+    finally:
+        connection.close()
+
+
+if __name__ == "__main__":
+    init_db()

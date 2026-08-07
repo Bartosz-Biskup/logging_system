@@ -1,5 +1,3 @@
-from datetime import datetime
-from http.client import TOO_EARLY
 from typing import Annotated
 from redis import Redis
 from fastapi import FastAPI, Depends, HTTPException, status
@@ -8,8 +6,7 @@ from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy import create_engine
 from os import getenv
 from dotenv import load_dotenv
-from pydantic import BaseModel, EmailStr, Field
-from repos.user_repository import User, AccountState, UserRepository
+from repos.user_repository import User, UserRepository
 from repos.refresh_token_repository import RefreshTokenRepository
 from repos.ban_repository import BanRepository
 from repos.password_reset_repo import PasswordResetRequestRepository
@@ -17,17 +14,28 @@ from repos.mfa_setup import MfaSetupRepository
 from repos.mfa_login_request import MfaLoginRequestRepository
 from services.auth_service import UserAuthService, LoginResponse, LoginStatus
 from services.exceptions import InvalidPasswordException, MFAException, NotAuthenticatedException, UserAlreadyRegisteredException, UserNotFoundException
+from services.hashing_utils import HashingService
 from services.user_service import UserService
-from services.config import (MIN_PASSWORD_LENGTH, 
-                             MAX_PASSWORD_LENGTH,
-                             ACCESS_TOKEN_EXP_TIME_MINUTES)
+from services.config import ACCESS_TOKEN_EXP_TIME_MINUTES
 from services.token_service import TokenPair, TokenService, AccessTokenBlacklist
+from services.JWT_utils import JWTTokenIssuer
 from services.ban_service import BanService
 from services.user_capability_checker_service import UserCapabilityCheckerService
 from services.mail_sender_service import MailSender
 from services.password_reset_service import PasswordResetService
 from services.mfa_service import MFAService, MfaLoginCode
 from services.message_sender import MessageSender
+from api.response_models import (
+    MfaSetupRequest,
+    RequestPasswordResetBody,
+    ResetPasswordBody,
+    UpdateEmailRequest,
+    UpdatePasswordRequest,
+    UpdateUsernameRequest,
+    UserLoginRequest,
+    UserRegisterRequest,
+    UserResponseModel,
+)
 
 
 app = FastAPI()
@@ -66,8 +74,13 @@ def get_token_repo(db: Session = Depends(get_db)):
     return RefreshTokenRepository(db)
 
 
-def get_user_service(user_repo = Depends(get_user_repo)):
-    return UserService(user_repo)
+def get_hashing_service():
+    return HashingService()
+
+
+def get_user_service(user_repo = Depends(get_user_repo),
+                     hashing_service = Depends(get_hashing_service)):
+    return UserService(user_repo, hashing_service)
 
 
 def get_redis():
@@ -82,10 +95,23 @@ def get_access_token_blacklist(redis: Redis = Depends(get_redis)):
                                 access_token_ttl_seconds)
 
 
-def get_token_service(token_repo: RefreshTokenRepository = Depends(get_token_repo),
-                      access_token_blacklist: AccessTokenBlacklist = Depends(get_access_token_blacklist)):
-    return TokenService(token_repo,
-                        access_token_blacklist)
+def get_jwt_issuer() -> JWTTokenIssuer:
+    access_secret = getenv("ACCESS_TOKEN_SECRET")
+    refresh_secret = getenv("REFRESH_TOKEN_SECRET")
+    if not access_secret or not refresh_secret:
+        raise ValueError("ACCESS_TOKEN_SECRET and REFRESH_TOKEN_SECRET must be set")
+    return JWTTokenIssuer(
+        access_token_secret=access_secret,
+        refresh_token_secret=refresh_secret,
+    )
+
+
+def get_token_service(
+    token_repo: RefreshTokenRepository = Depends(get_token_repo),
+    access_token_blacklist: AccessTokenBlacklist = Depends(get_access_token_blacklist),
+    jwt_issuer: JWTTokenIssuer = Depends(get_jwt_issuer),
+):
+    return TokenService(token_repo, access_token_blacklist, jwt_issuer)
 
 
 def get_ban_service(ban_repo: BanRepository = Depends(get_ban_repo),
@@ -102,13 +128,20 @@ def get_password_reset_repo(db: Session = Depends(get_db)):
     return PasswordResetRequestRepository(db)
 
 
+def get_mail_sender():
+    return MailSender()
+
+
 def get_password_reset_service(password_reset_repo: PasswordResetRequestRepository = Depends(get_password_reset_repo),
                                user_repo: UserRepository = Depends(get_user_repo),
-                               capability_checker: UserCapabilityCheckerService = Depends(get_user_capability_checker_service)):
+                               capability_checker: UserCapabilityCheckerService = Depends(get_user_capability_checker_service),
+                               hashing_service = Depends(get_hashing_service),
+                               mail_sender = Depends(get_mail_sender)):
     return PasswordResetService(password_reset_repo,
                                 user_repo,
-                                MailSender(),
-                                capability_checker)
+                                mail_sender,
+                                capability_checker,
+                                hashing_service)
 
 
 def get_mfa_setup_repo(db: Session = Depends(get_db)):
@@ -128,23 +161,27 @@ def get_mfa_service(
     mfa_login_request_repo: MfaLoginRequestRepository = Depends(get_mfa_login_request_repo),
     user_capability_checker: UserCapabilityCheckerService = Depends(get_user_capability_checker_service),
     message_sender: MessageSender = Depends(get_message_sender),
+    hashing_service = Depends(get_hashing_service)
 ):
     return MFAService(
         mfa_setup_repo,
         mfa_login_request_repo,
         user_capability_checker,
         message_sender,
+        hashing_service
     )
 
 
 def get_user_auth_service(user_repo: UserRepository = Depends(get_user_repo),
                           token_service: TokenService = Depends(get_token_service),
                           user_capability_checker: UserCapabilityCheckerService = Depends(get_user_capability_checker_service),
-                          mfa_service: MFAService = Depends(get_mfa_service)):
+                          mfa_service: MFAService = Depends(get_mfa_service),
+                          hashing_service = Depends(get_hashing_service)):
     return UserAuthService(user_repo,
                            token_service,
                            user_capability_checker,
-                           mfa_service)
+                           mfa_service,
+                           hashing_service)
 
 
 def get_user_from_refresh_token(credentials: Annotated[HTTPAuthorizationCredentials, Depends(http_bearer)],
@@ -169,21 +206,6 @@ def get_user_from_access_token(credentials: Annotated[HTTPAuthorizationCredentia
         )
 
 
-class UserRegisterRequest(BaseModel):
-    username: str = Field(min_length=3, max_length=50)
-    email: EmailStr = Field(max_length=120)
-    password: str = Field(min_length=8, max_length=256)
-
-
-class UserResponseModel(BaseModel):
-    id: str = Field(min_length=36, max_length=36)
-    username: str = Field(min_length=3, max_length=50)
-    email: EmailStr = Field(max_length=120)
-    account_state: AccountState
-    role: str = Field(max_length=20)
-    created_at: datetime
-
-
 @app.post("/users/register", response_model=UserResponseModel)
 def register(body: UserRegisterRequest,
              user_service: Annotated[UserService, Depends(get_user_service)]):
@@ -203,12 +225,6 @@ def register(body: UserRegisterRequest,
 
     return UserResponseModel.model_validate(new_user,
                                             from_attributes=True)
-
-
-class UserLoginRequest(BaseModel):
-    email: EmailStr = Field(max_length=120)
-    password: str = Field(min_length=MIN_PASSWORD_LENGTH,
-                          max_length=MAX_PASSWORD_LENGTH)
 
 
 @app.post("/users/login", response_model=LoginResponse)
@@ -275,19 +291,6 @@ def get_user(username: str,
     return UserResponseModel.model_validate(user, from_attributes=True)
 
 
-class UpdateEmailRequest(BaseModel):
-    new_email: EmailStr = Field(max_length=120)
-
-
-class UpdateUsernameRequest(BaseModel):
-    new_username: str = Field(min_length=3, max_length=50)
-
-
-class UpdatePasswordRequest(BaseModel):
-    current_password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH)
-    new_password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH)
-
-
 @app.patch("/users/email", response_model=UserResponseModel)
 def update_email(
     body: UpdateEmailRequest,
@@ -321,10 +324,10 @@ def update_username(
 def update_password(
     body: UpdatePasswordRequest,
     user: Annotated[User, Depends(get_user_from_access_token)],
-    user_auth_service: Annotated[UserAuthService, Depends(get_user_auth_service)]
+    user_service: Annotated[UserService, Depends(get_user_service)]
 ):
     try:
-        updated_user: User = user_auth_service.change_password(user, 
+        updated_user: User = user_service.change_password(user.id, 
                                                                body.current_password, 
                                                                body.new_password)
     except NotAuthenticatedException:
@@ -335,15 +338,6 @@ def update_password(
                             detail="Invalid new password. Check our password guidelines.")
 
     return updated_user
-
-
-class RequestPasswordResetBody(BaseModel):
-    email: EmailStr = Field(max_length=120)
-
-
-class ResetPasswordBody(BaseModel):
-    reset_request_id: str = Field(min_length=36, max_length=36)
-    new_password: str = Field(min_length=MIN_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH)
 
 
 @app.post("/users/password-reset/request", status_code=status.HTTP_200_OK)
@@ -395,12 +389,8 @@ def confirm_mfa_login(body: MfaLoginCode,
         )
 
 
-class MfaSetupRequst(BaseModel):
-    phone_number: str
-
-
 @app.post("/mfa/setup", status_code=status.HTTP_201_CREATED)
-def setup_mfa(body: MfaSetupRequst,
+def setup_mfa(body: MfaSetupRequest,
               user: Annotated[User, Depends(get_user_from_access_token)],
               mfa_service: Annotated[MFAService, Depends(get_mfa_service)]):
     try:

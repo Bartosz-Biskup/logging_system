@@ -2,9 +2,14 @@ import pytest
 from datetime import datetime, timezone, timedelta
 from services.token_service import TokenService, TokenPair
 from services.exceptions import NotAuthenticatedException
+from services.JWT_utils import JWTTokenIssuer
 from repos.refresh_token_repository import RefreshToken
 from uuid import uuid4
 
+
+# ---------------------------------------------------------------------------
+#  Fakes
+# ---------------------------------------------------------------------------
 
 class FakeRefreshTokenRepository:
     def __init__(self):
@@ -20,7 +25,8 @@ class FakeRefreshTokenRepository:
         self.tokens[token.id] = token
 
     def get_active_by_user(self, user_id: str):
-        return [t for t in self.tokens.values() if t.user_id == user_id and t.revoked_at is None]
+        return [t for t in self.tokens.values()
+                if t.user_id == user_id and t.revoked_at is None]
 
 
 class FakeAccessTokenBlacklist:
@@ -34,6 +40,10 @@ class FakeAccessTokenBlacklist:
         return jti in self.blacklisted
 
 
+# ---------------------------------------------------------------------------
+#  Fixtures
+# ---------------------------------------------------------------------------
+
 @pytest.fixture
 def token_repo():
     return FakeRefreshTokenRepository()
@@ -45,249 +55,205 @@ def blacklist():
 
 
 @pytest.fixture
-def token_service(token_repo, blacklist):
-    return TokenService(token_repo=token_repo, access_token_blacklist=blacklist)
-
-
-def test_get_valid_refresh_token_happy_path(token_service, token_repo, monkeypatch):
-    # Arrange
-    jti = str(uuid4())  # ten sam string użyty w payloadzie i w id tokenu w repo
-
-    class DummyPayload:
-        pass
-    DummyPayload.jti = jti
-
-    monkeypatch.setattr(
-        "services.token_service.JWTTokenIssuer.decode_refresh_token",
-        lambda token: DummyPayload()  # <- wywołujesz klasę, nie zwracasz jej samej
+def jwt_issuer():
+    """A real JWTTokenIssuer with fake secrets — no monkeypatching needed."""
+    return JWTTokenIssuer(
+        access_token_secret="test-access-secret",
+        refresh_token_secret="test-refresh-secret",
     )
+
+
+@pytest.fixture
+def token_service(token_repo, blacklist, jwt_issuer):
+    return TokenService(token_repo, blacklist, jwt_issuer)
+
+
+# ---------------------------------------------------------------------------
+#  get_valid_refresh_token_or_raise
+# ---------------------------------------------------------------------------
+
+def test_get_valid_refresh_token_happy_path(token_service, token_repo, jwt_issuer):
+    user_id = str(uuid4())
+    token_str, jti, _sub, exp = jwt_issuer.create_refresh_token(user_id)
 
     stored_token = RefreshToken(
         id=jti,
-        user_id=str(uuid4()),
-        expires_at=datetime.now(timezone.utc) + timedelta(days=7),
+        user_id=user_id,
+        expires_at=exp,
         revoked_at=None,
         created_at=datetime.now(timezone.utc),
     )
     token_repo.create_refresh_token(stored_token)
 
-    # Act
-    result = token_service.get_valid_refresh_token_or_raise("any-raw-token-string")
-
-    # Assert
+    result = token_service.get_valid_refresh_token_or_raise(token_str)
     assert result is stored_token
 
 
-def test_get_valid_refresh_token_invalid_token_signature(token_service,
-                                                         token_repo,
-                                                         monkeypatch):
-    def raise_value_error(token):
-        raise ValueError()
-    monkeypatch.setattr("services.token_service.JWTTokenIssuer.decode_refresh_token",
-                        raise_value_error
-    )
+def test_get_valid_refresh_token_invalid_signature(token_service):
+    with pytest.raises(NotAuthenticatedException):
+        token_service.get_valid_refresh_token_or_raise("garbage-token")
+
+
+def test_get_valid_refresh_token_not_in_db(token_service, token_repo, jwt_issuer):
+    user_id = str(uuid4())
+    token_str, _jti, _sub, _exp = jwt_issuer.create_refresh_token(user_id)
+    # token decodes fine but is never stored in the repo
 
     with pytest.raises(NotAuthenticatedException):
-        token_service.get_valid_refresh_token_or_raise("some-refresh-token")
+        token_service.get_valid_refresh_token_or_raise(token_str)
 
 
-def test_get_valid_refresh_token_token_not_in_db(token_service, token_repo, monkeypatch):
-    class DummyPayload:
-        pass
-    DummyPayload.jti = "some-jti"
-
-    monkeypatch.setattr("services.token_service.JWTTokenIssuer.decode_refresh_token",
-                        lambda token: DummyPayload())
-
-    with pytest.raises(NotAuthenticatedException):
-        token_service.get_valid_refresh_token_or_raise("some non existing rt")
-
-
-def test_get_valid_refresh_token_revoked(token_service, token_repo, monkeypatch):
-    class DummyPayload:
-        pass
-    jti= str(uuid4())
-    DummyPayload.jti = jti
-    DummyPayload.revoked_at = datetime.now()
+def test_get_valid_refresh_token_revoked(token_service, token_repo, jwt_issuer):
+    user_id = str(uuid4())
+    token_str, jti, _sub, exp = jwt_issuer.create_refresh_token(user_id)
 
     stored_token = RefreshToken(
         id=jti,
-        user_id=str(uuid4()),
-        expires_at=datetime.now(timezone.utc) + timedelta(days=7),
-        revoked_at=datetime.now(),
+        user_id=user_id,
+        expires_at=exp,
+        revoked_at=datetime.now(timezone.utc),  # ← already revoked
         created_at=datetime.now(timezone.utc),
     )
-    token_service._token_repo.create_refresh_token(stored_token)
-
-    monkeypatch.setattr("services.token_service.JWTTokenIssuer.decode_refresh_token",
-                        lambda token: DummyPayload())
+    token_repo.create_refresh_token(stored_token)
 
     with pytest.raises(NotAuthenticatedException):
-        token_service.get_valid_refresh_token_or_raise("some_ref_token")
+        token_service.get_valid_refresh_token_or_raise(token_str)
 
 
-def test_generate_token_pair_for_user(token_service, token_repo, monkeypatch):
-    class DummyToken:
-        def __init__(self, jti, user_id):
-            self.jti = jti
-            self.user_id = user_id
+# ---------------------------------------------------------------------------
+#  generate_token_pair_for_user
+# ---------------------------------------------------------------------------
 
-    access_token_called = False
-    refresh_token_called = False
-
-    def create_access_token(user_id, username, role, jti):
-        nonlocal access_token_called
-        access_token_called = True
-        return jti
-
-    def create_refresh_token(user_id, jti):
-        nonlocal refresh_token_called
-        refresh_token_called = True
-        return jti, jti, user_id, datetime.now(timezone.utc)+timedelta(minutes=15)
-
-    monkeypatch.setattr("services.token_service.JWTTokenIssuer.create_access_token",
-                        create_access_token)
-
-    monkeypatch.setattr("services.token_service.JWTTokenIssuer.create_refresh_token",
-                        create_refresh_token)
-
+def test_generate_token_pair_for_user(token_service, token_repo, jwt_issuer):
     user_id = str(uuid4())
 
-    result = token_service.generate_token_pair_for_user(user_id,
-                                                        "username",
-                                                        "admin")
+    result = token_service.generate_token_pair_for_user(user_id, "username", "admin")
 
-    assert result.access_token == result.refresh_token
-    assert access_token_called and refresh_token_called
-    assert len(token_service._token_repo.get_active_by_user(user_id)) == 1
-    assert token_service._token_repo.get_refresh_token_by_id(result.refresh_token) is not None
+    # Both tokens should be valid JWTs
+    access_payload = jwt_issuer.decode_access_token(result.access_token)
+    refresh_payload = jwt_issuer.decode_refresh_token(result.refresh_token)
 
-from services.JWT_utils import JWTTokenIssuer
+    assert access_payload.sub == user_id
+    assert refresh_payload.sub == user_id
+
+    # Refresh token persisted in repo
+    stored = token_repo.get_refresh_token_by_id(refresh_payload.jti)
+    assert stored is not None
+    assert stored.user_id == user_id
+    assert stored.revoked_at is None
 
 
-def test_rotate_token_pair_happy_path(token_service, token_repo, blacklist):
-    # Arrange
+# ---------------------------------------------------------------------------
+#  rotate_token_pair
+# ---------------------------------------------------------------------------
+
+def test_rotate_token_pair_happy_path(token_service, token_repo, blacklist, jwt_issuer):
     user_id = str(uuid4())
     old_pair = token_service.generate_token_pair_for_user(user_id, "some_username", "user")
-    old_jti = JWTTokenIssuer.decode_refresh_token(old_pair.refresh_token).jti
+    old_jti = jwt_issuer.decode_refresh_token(old_pair.refresh_token).jti
 
-    # Act
-    new_pair = token_service.rotate_token_pair(old_pair.refresh_token, user_id, "some_username", "user")
+    new_pair = token_service.rotate_token_pair(
+        old_pair.refresh_token, user_id, "some_username", "user",
+    )
 
-    # Assert — stary token revoked i zablacklistowany
+    # Old token revoked & blacklisted
     old_token = token_repo.get_refresh_token_by_id(old_jti)
     assert old_token.revoked_at is not None
     assert blacklist.is_access_token_blacklisted(old_jti)
 
-    # Assert — nowy token aktywny, inny jti niż stary
-    new_jti = JWTTokenIssuer.decode_refresh_token(new_pair.refresh_token).jti
+    # New token is active and has a different jti
+    new_jti = jwt_issuer.decode_refresh_token(new_pair.refresh_token).jti
     new_token = token_repo.get_refresh_token_by_id(new_jti)
     assert new_token is not None
     assert new_token.revoked_at is None
     assert new_jti != old_jti
 
 
-def test_rotate_token_pair_user_id_mismatch(token_service, token_repo, blacklist):
-    # Arrange
+def test_rotate_token_pair_user_id_mismatch(token_service, token_repo, blacklist, jwt_issuer):
     real_user_id = str(uuid4())
     someone_elses_id = str(uuid4())
     pair = token_service.generate_token_pair_for_user(real_user_id, "some_username", "user")
-    jti = JWTTokenIssuer.decode_refresh_token(pair.refresh_token).jti
+    jti = jwt_issuer.decode_refresh_token(pair.refresh_token).jti
 
-    # Act & Assert
     with pytest.raises(NotAuthenticatedException):
-        token_service.rotate_token_pair(pair.refresh_token, someone_elses_id, "some_username", "user")
+        token_service.rotate_token_pair(
+            pair.refresh_token, someone_elses_id, "some_username", "user",
+        )
 
-    # Assert — nic się nie zmutowało, oryginalny token dalej aktywny
+    # Nothing mutated — original token still active
     token = token_repo.get_refresh_token_by_id(jti)
     assert token.revoked_at is None
     assert not blacklist.is_access_token_blacklisted(jti)
 
 
-def test_revoke_token_pair(token_service, token_repo, blacklist):
+# ---------------------------------------------------------------------------
+#  revoke_token_pair / revoke_all_user_refresh_tokens
+# ---------------------------------------------------------------------------
+
+def test_revoke_token_pair(token_service, token_repo, blacklist, jwt_issuer):
     user_id = str(uuid4())
-    username = "Gordzo"
-    role = "Boss"
+    pair = token_service.generate_token_pair_for_user(user_id, "Gordzo", "Boss")
+    pair_jti = jwt_issuer.decode_refresh_token(pair.refresh_token).jti
 
-    token_pair = token_service.generate_token_pair_for_user(user_id, username, role)
-    token_pair_jti = JWTTokenIssuer.decode_refresh_token(token_pair.refresh_token).jti
+    token_service.revoke_token_pair(pair.refresh_token)
+    active_jtis = [t.id for t in token_repo.get_active_by_user(user_id)]
 
-    token_service.revoke_token_pair(token_pair.refresh_token)
-    users_token = [token.jti for token in token_repo.get_active_by_user(user_id)]
+    assert token_repo.get_refresh_token_by_id(pair_jti).revoked_at is not None
+    assert blacklist.is_access_token_blacklisted(pair_jti)
+    assert pair_jti not in active_jtis
 
-    assert token_repo.get_refresh_token_by_id(token_pair_jti).revoked_at is not None
-    assert blacklist.is_access_token_blacklisted(token_pair_jti)
-    assert token_pair_jti not in users_token
 
-def test_revoke_all_users_refresh_token(token_service, token_repo, blacklist):
+def test_revoke_all_users_refresh_token(token_service, token_repo, blacklist, jwt_issuer):
     user_id = str(uuid4())
-    username = "Gordzo"
-    role = "Boss"
 
-    tokens: list[TokenPair] = [token_service.generate_token_pair_for_user(user_id,
-                                                                          username,
-                                                                          role) for _ in range(10)]
-    another_user_token = token_service.generate_token_pair_for_user(str(uuid4()), "a", "b")
+    tokens: list[TokenPair] = [
+        token_service.generate_token_pair_for_user(user_id, "Gordzo", "Boss")
+        for _ in range(10)
+    ]
+    another_user_token = token_service.generate_token_pair_for_user(
+        str(uuid4()), "a", "b",
+    )
 
-    #revoking some of the tokens just to see what happens to previously revoked tokens
+    # Revoke a couple first to check idempotency
     token_service.revoke_token_pair(tokens[0].refresh_token)
     token_service.revoke_token_pair(tokens[1].refresh_token)
 
     token_service.revoke_all_user_refresh_tokens(user_id)
 
-    for token in tokens:
-        token_jti = JWTTokenIssuer.decode_refresh_token(token.refresh_token).jti
-        assert token_repo.get_refresh_token_by_id(token_jti).revoked_at is not None
-        assert blacklist.is_access_token_blacklisted(token_jti)
+    for token_pair in tokens:
+        jti = jwt_issuer.decode_refresh_token(token_pair.refresh_token).jti
+        assert token_repo.get_refresh_token_by_id(jti).revoked_at is not None
+        assert blacklist.is_access_token_blacklisted(jti)
 
-    another_token_jti = JWTTokenIssuer.decode_refresh_token(another_user_token.refresh_token).jti
-    assert token_repo.get_refresh_token_by_id(another_token_jti).revoked_at is None
-    assert not blacklist.is_access_token_blacklisted(another_token_jti)
-
-
-def test_get_user_id_from_access_token_happy_path(token_service, blacklist, monkeypatch):
-    # Arrange
-    class DummyPayload:
-        pass
-    DummyPayload.jti = "some-jti"
-    DummyPayload.sub = "user-123"
-
-    monkeypatch.setattr(
-        "services.token_service.JWTTokenIssuer.decode_access_token",
-        lambda token: DummyPayload(),
-    )
-
-    # Act
-    user_id = token_service.get_user_id_from_access_token_or_raise("valid-access-token")
-
-    # Assert
-    assert user_id == "user-123"
+    another_jti = jwt_issuer.decode_refresh_token(another_user_token.refresh_token).jti
+    assert token_repo.get_refresh_token_by_id(another_jti).revoked_at is None
+    assert not blacklist.is_access_token_blacklisted(another_jti)
 
 
-def test_get_user_id_from_access_token_invalid(token_service, monkeypatch):
-    monkeypatch.setattr(
-        "services.token_service.JWTTokenIssuer.decode_access_token",
-        lambda token: (_ for _ in ()).throw(ValueError()),
-    )
+# ---------------------------------------------------------------------------
+#  get_user_id_from_access_token_or_raise
+# ---------------------------------------------------------------------------
+
+def test_get_user_id_from_access_token_happy_path(token_service, jwt_issuer):
+    user_id = str(uuid4())
+    access_token = jwt_issuer.create_access_token(user_id, "u", "user")
+
+    result = token_service.get_user_id_from_access_token_or_raise(access_token)
+    assert result == user_id
+
+
+def test_get_user_id_from_access_token_invalid(token_service):
+    with pytest.raises(NotAuthenticatedException):
+        token_service.get_user_id_from_access_token_or_raise("not-a-valid-jwt")
+
+
+def test_get_user_id_from_access_token_blacklisted(token_service, blacklist, jwt_issuer):
+    user_id = str(uuid4())
+    access_token = jwt_issuer.create_access_token(user_id, "u", "user")
+    jti = jwt_issuer.decode_access_token(access_token).jti
+    blacklist.blacklist_access_token(jti)
 
     with pytest.raises(NotAuthenticatedException):
-        token_service.get_user_id_from_access_token_or_raise("invalid-token")
+        token_service.get_user_id_from_access_token_or_raise(access_token)
 
-
-def test_get_user_id_from_access_token_blacklisted(token_service, blacklist, monkeypatch):
-    # Arrange
-    class DummyPayload:
-        pass
-    DummyPayload.jti = "blacklisted-jti"
-    DummyPayload.sub = "user-123"
-
-    monkeypatch.setattr(
-        "services.token_service.JWTTokenIssuer.decode_access_token",
-        lambda token: DummyPayload(),
-    )
-    blacklist.blacklist_access_token("blacklisted-jti")
-
-    # Act & Assert
-    with pytest.raises(NotAuthenticatedException):
-        token_service.get_user_id_from_access_token_or_raise("blacklisted-token")
 

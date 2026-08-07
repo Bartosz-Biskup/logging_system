@@ -57,13 +57,15 @@ class AccessTokenBlacklist:
 class TokenService:
     def __init__(self,
                  token_repo: RefreshTokenRepositoryProtocol,
-                 access_token_blacklist: AccessTokenBlacklistProtocol) -> None:
+                 access_token_blacklist: AccessTokenBlacklistProtocol,
+                 jwt_issuer: JWTTokenIssuer) -> None:
         self._token_repo = token_repo
         self._access_token_blacklist = access_token_blacklist
+        self._jwt_issuer = jwt_issuer
 
     def get_valid_refresh_token_or_raise(self, refresh_token: str) -> RefreshToken:
         try:
-            token_: RefreshTokenPayload = JWTTokenIssuer.decode_refresh_token(refresh_token)
+            token_: RefreshTokenPayload = self._jwt_issuer.decode_refresh_token(refresh_token)
         except ValueError:
             raise NotAuthenticatedException("Invalid refresh token.")
 
@@ -78,7 +80,7 @@ class TokenService:
 
     def get_user_id_from_access_token_or_raise(self, access_token: str) -> str:
         try:
-            token: AccessTokenPayload = JWTTokenIssuer.decode_access_token(access_token)
+            token: AccessTokenPayload = self._jwt_issuer.decode_access_token(access_token)
         except ValueError:
             raise NotAuthenticatedException("Invalid access token.")
 
@@ -89,11 +91,15 @@ class TokenService:
 
     def generate_token_pair_for_user(self, user_id: str, username: str, role: str) -> TokenPair:
         jti: str = str(uuid4())
-        access_token = JWTTokenIssuer.create_access_token(user_id=user_id,
-                                                          username=username,
-                                                          role=role,
-                                                          jti=jti)
-        refresh_token, jti, sub, exp = JWTTokenIssuer.create_refresh_token(user_id=user_id, jti=jti)
+        access_token = self._jwt_issuer.create_access_token(
+            user_id=user_id,
+            username=username,
+            role=role,
+            jti=jti,
+        )
+        refresh_token, jti, sub, exp = self._jwt_issuer.create_refresh_token(
+            user_id=user_id, jti=jti,
+        )
 
         self._token_repo.create_refresh_token(RefreshToken(
             id=jti,

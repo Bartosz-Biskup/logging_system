@@ -1,32 +1,21 @@
-from pydantic import BaseModel, Field, field_validator
-from datetime import datetime, timezone
+from pydantic import BaseModel, Field
 from typing import Protocol
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from repos.exceptions import ObjectNotFoundException, ObjectAlreadyExists
+from repos._types import UTCDateTime, UTCDateTimeOrNone
 from db_and_models.ban import Ban as BanModel
 
 
 class Ban(BaseModel):
     id: str = Field(min_length=36, max_length=36)
     user_id: str = Field(min_length=36, max_length=36)
-    banned_at: datetime
-    banned_until: datetime
+    banned_at: UTCDateTime
+    banned_until: UTCDateTime
     reason: str | None = Field(max_length=255)
     banned_by: str | None = Field(min_length=36, max_length=36)
-    revoked_at: datetime | None = None
-
-    @field_validator("banned_at", "banned_until", "revoked_at", mode="before")
-    @classmethod
-    def validate_datetime(
-        cls,
-        value: datetime | None
-    ) -> datetime | None:
-        if value is None:
-            return None
-
-        return value.replace(tzinfo=timezone.utc)
+    revoked_at: UTCDateTimeOrNone = None
 
     model_config = {
         "from_attributes": True

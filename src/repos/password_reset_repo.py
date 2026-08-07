@@ -1,25 +1,17 @@
-from pydantic import BaseModel, field_validator, Field
-from typing import Protocol, Self
-from datetime import datetime, timezone
+from pydantic import BaseModel, Field
+from typing import Protocol
 from sqlalchemy.orm import Session
 from sqlalchemy import select
+from repos._types import UTCDateTime, UTCDateTimeOrNone
 from db_and_models.password_reset_request import PasswordResetRequest as PasswordResetRequestModel
 
 
 class PasswordResetRequest(BaseModel):
     id: str = Field(min_length=36, max_length=36)
     user_id: str = Field(min_length=36, max_length=36)
-    expires_at: datetime
-    used_at: datetime | None
-    created_at: datetime
-
-    @field_validator('expires_at', 'used_at', 'created_at', mode='before')
-    @classmethod
-    def validate(cls, value: datetime | None) -> datetime | None:
-        if value is None:
-            return None
-
-        return value.replace(tzinfo=timezone.utc)
+    expires_at: UTCDateTime
+    used_at: UTCDateTimeOrNone
+    created_at: UTCDateTime
 
 
 class PasswordResetRequestRepositoryProtocol(Protocol):

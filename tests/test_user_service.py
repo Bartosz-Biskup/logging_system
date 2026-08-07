@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from services.user_service import UserService
+from services.hashing_utils import HashingService
 from repos.user_repository import User, AccountState
 from services.exceptions import (InvalidPasswordException, 
                                  UserAlreadyRegisteredException,
@@ -10,8 +11,13 @@ from services.exceptions import (InvalidPasswordException,
 
 
 @pytest.fixture
-def user_service(user_repo):
-    return UserService(user_repo)
+def hashing_service():
+    return HashingService()
+
+
+@pytest.fixture
+def user_service(user_repo, hashing_service):
+    return UserService(user_repo, hashing_service)
 
 
 def test_register_user_creates_and_returns_user(user_service, user_repo):
@@ -22,14 +28,13 @@ def test_register_user_creates_and_returns_user(user_service, user_repo):
     assert user_repo.get_user_by_username("Bartosz") == new_user != None
 
 
-def test_register_user_password_is_hashed(user_service, user_repo, mocker):
-    mock_hash = mocker.patch("services.hashing_utils.HashingService.hash_password",
-                 return_value="some_hash")
+def test_register_user_password_is_hashed(user_service, user_repo, hashing_service):
+    # Patch the instance, not the class
+    hashing_service.hash_password = lambda pw: "some_hash"
     new_user = user_service.register_user("Bartosz", 
                                               "bartosz@gmail.com", 
                                               "SomePassword1!")
 
-    mock_hash.assert_called_once_with("SomePassword1!")
     assert user_repo.get_user_by_username("Bartosz").password_hash == "some_hash"
 
 

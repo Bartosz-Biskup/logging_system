@@ -5,7 +5,7 @@ from random import randint
 from services.config import MFA_REQUEST_EXPIRATION_TIME_MINUTES
 from services.user_capability_checker_service import UserCapabilityCheckerServiceProtocol
 from services.message_sender import MessageSenderProtocol
-from services.hashing_utils import HashingService
+from services.hashing_utils import HashingServiceProtocol
 from services.exceptions import MFAException, NotAuthenticatedException
 from repos.mfa_setup import MfaSetupRepositoryProtocol, MfaSetup
 from repos.mfa_login_request import MfaLoginRequestRepositoryProtocol, MfaLoginRequest
@@ -44,11 +44,13 @@ class MFAService:
                  mfa_setup_repo: MfaSetupRepositoryProtocol,
                  mfa_login_request_repo: MfaLoginRequestRepositoryProtocol,
                  user_capability_checker: UserCapabilityCheckerServiceProtocol,
-                 message_sender: MessageSenderProtocol) -> None:
+                 message_sender: MessageSenderProtocol,
+                 hashing_service: HashingServiceProtocol) -> None:
         self._mfa_setup_repo = mfa_setup_repo
         self._mfa_login_repo = mfa_login_request_repo
         self._user_capability_service = user_capability_checker
         self._message_sender = message_sender
+        self._hashing_service = hashing_service
 
     def setup_mfa(self, 
                   user_id: str,
@@ -89,7 +91,7 @@ class MFAService:
             raise MFAException("MFA is not set up for this user")
 
         code = randint(100000, 999999)
-        code_hash = HashingService.hash_password(str(code))
+        code_hash = self._hashing_service.hash_password(str(code))
 
         request_id = str(uuid4())
         now = datetime.now(timezone.utc)
@@ -124,7 +126,7 @@ class MFAService:
         if request.confirmed_at is not None:
             raise MFAException("MFA login request has already been confirmed")
 
-        if not HashingService.verify_password_hash(
+        if not self._hashing_service.verify_password_hash(
             request.code_hash,
             str(mfa_login_code.code)
         ):

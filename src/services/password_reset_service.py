@@ -1,13 +1,12 @@
 from datetime import datetime, timezone, timedelta
 from typing import Protocol
 from uuid import uuid4
-
 from repos.password_reset_repo import PasswordResetRequestRepositoryProtocol, PasswordResetRequest
 from repos.user_repository import UserRepositoryProtocol, User
 from services.config import (PASSWORD_RESET_REQUEST_EXPIRATION_TIME_HOURS,
                              PASSWORD_RESET_REQUEST_DELAY_HOURS)
 from services.mail_sender_service import MailSenderProtocol
-from services.hashing_utils import HashingService
+from services.hashing_utils import HashingServiceProtocol
 from services.password_validator import is_password_valid
 from services.exceptions import NotAuthenticatedException, InvalidPasswordException
 from services.user_capability_checker_service import UserCapabilityCheckerServiceProtocol
@@ -28,11 +27,13 @@ class PasswordResetService:
                  password_reset_repository: PasswordResetRequestRepositoryProtocol,
                  user_repository: UserRepositoryProtocol,
                  mail_sender: MailSenderProtocol,
-                 capability_checker: UserCapabilityCheckerServiceProtocol) -> None:
+                 capability_checker: UserCapabilityCheckerServiceProtocol,
+                 hashing_service: HashingServiceProtocol) -> None:
         self._password_reset_repo = password_reset_repository
         self._user_repo = user_repository
         self._mail_sender = mail_sender
         self._capability_checker = capability_checker
+        self._hashing_service = hashing_service
 
     def _get_capable_user_by_email_or_raise(self, email: str) -> User:
         user: User | None = self._user_repo.get_user_by_email(email.lower())
@@ -84,7 +85,7 @@ class PasswordResetService:
         elif last_link.created_at + timedelta(hours=PASSWORD_RESET_REQUEST_DELAY_HOURS) > now:
             raise ValueError('Cannot generate new password request link')
         else:
-            req_id: str = str(uuid4())
+            req_id = str(uuid4())
             new_request = PasswordResetRequest(
                 id=req_id,
                 user_id=user.id,
@@ -118,7 +119,7 @@ class PasswordResetService:
         if not is_password_valid(new_password):
             raise InvalidPasswordException()
 
-        user.password_hash = HashingService.hash_password(new_password)
+        user.password_hash = self._hashing_service.hash_password(new_password)
         reset_req.used_at = datetime.now(timezone.utc)
         self._password_reset_repo.update_reset_request(reset_req)
         self._user_repo.update_user(user)

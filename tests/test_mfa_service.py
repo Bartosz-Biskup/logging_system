@@ -3,6 +3,7 @@ import pytest
 from datetime import datetime, timezone, timedelta
 from db_and_models.user import AccountState
 from services.mfa_service import MFAService, MfaLoginCode
+from services.hashing_utils import HashingService
 from services.user_capability_checker_service import UserCapabilityCheckerService
 from services.message_sender import MessageSender
 from services.exceptions import MFAException, NotAuthenticatedException
@@ -101,8 +102,13 @@ def message_sender():
 
 
 @pytest.fixture
-def mfa_service(mfa_setup_repo, mfa_login_request_repo, user_capability_checker, message_sender):
-    return MFAService(mfa_setup_repo, mfa_login_request_repo, user_capability_checker, message_sender)
+def hashing_service():
+    return HashingService()
+
+
+@pytest.fixture
+def mfa_service(mfa_setup_repo, mfa_login_request_repo, user_capability_checker, message_sender, hashing_service):
+    return MFAService(mfa_setup_repo, mfa_login_request_repo, user_capability_checker, message_sender, hashing_service)
 
 
 def get_user_with_mfa(user_repo: UserRepositoryProtocol, 
@@ -122,7 +128,7 @@ def get_user_with_mfa(user_repo: UserRepositoryProtocol,
 
     mfa_setup = MfaSetup(
         user_id=user_id,
-        user_phone_number="67"
+        user_phone_number="+48123456789"
     )
 
     mfa_repo.create_mfa_setup(mfa_setup)
@@ -150,10 +156,18 @@ def get_user_without_mfa(user_repo: UserRepositoryProtocol) -> User:
 def test_setup_mfa_happy_path(mfa_service, mfa_setup_repo, user_repo):
     user = get_user_without_mfa(user_repo)
 
-    mfa_service.setup_mfa(user.id, "1234")
+    mfa_service.setup_mfa(user.id, "+33202020202")
 
     assert mfa_setup_repo.get_mfa_setup_by_user(user.id) is not None
-    assert mfa_setup_repo.get_mfa_setup_by_user(user.id).user_phone_number == "1234"
+    assert mfa_setup_repo.get_mfa_setup_by_user(user.id).user_phone_number == "+33202020202"
+
+def test_setup_mfa_raises_when_invalid_number_format(mfa_service, mfa_setup_repo, user_repo):
+    user = get_user_without_mfa(user_repo)
+
+    with pytest.raises(MFAException):
+        mfa_service.setup_mfa(user.id, "1234")
+
+    assert mfa_setup_repo.get_mfa_setup_by_user(user.id) is None
 
 def test_setup_mfa_raises_when_user_not_capable(mfa_service, mfa_setup_repo, user_repo):
     user = get_user_without_mfa(user_repo)
@@ -161,14 +175,14 @@ def test_setup_mfa_raises_when_user_not_capable(mfa_service, mfa_setup_repo, use
     user_repo.update_user(user)
 
     with pytest.raises(NotAuthenticatedException):
-        mfa_service.setup_mfa(user.id, "1234")
+        mfa_service.setup_mfa(user.id, "+33202020202")
     assert mfa_setup_repo.get_mfa_setup_by_user(user.id) is None
 
 def test_setup_mfa_raises_when_mfa_already_set_up(mfa_service, mfa_setup_repo, user_repo):
     user = get_user_with_mfa(user_repo, mfa_setup_repo)
 
     with pytest.raises(MFAException):
-        mfa_service.setup_mfa(user.id, "1234")
+        mfa_service.setup_mfa(user.id, "+33202020202")
 
 def test_remove_mfa_happy_path(mfa_service, mfa_setup_repo, user_repo):
     user = get_user_with_mfa(user_repo, mfa_setup_repo)

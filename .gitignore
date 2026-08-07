@@ -15,6 +15,7 @@ htmlcov
 
 # python
 **/__pycache__
+.mypy_cache
 
 # macos
 .DS_Store

@@ -1,9 +1,10 @@
 from pydantic import BaseModel, Field, EmailStr, field_validator
 from sqlalchemy import select
-from datetime import datetime, timezone
 from typing import Protocol
+from datetime import datetime, timezone
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from repos._types import UTCDateTime
 from db_and_models.user import User as UserModel
 from db_and_models.user import AccountState
 from repos.exceptions import ObjectNotFoundException, ObjectAlreadyExists
@@ -16,12 +17,7 @@ class User(BaseModel):
     password_hash: str = Field(max_length=256)
     account_state: AccountState
     role: str = Field(max_length=20)
-    created_at: datetime
-
-    @field_validator('created_at', mode='before')
-    @classmethod
-    def validate_datetime(cls, value: datetime) -> datetime:
-        return value.replace(tzinfo=timezone.utc)
+    created_at: UTCDateTime
 
     @field_validator('email', mode='before')
     @classmethod

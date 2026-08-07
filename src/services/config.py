@@ -17,7 +17,6 @@ PASSWORD_RESET_REQUEST_DELAY_HOURS: Final[int] = 24
 # smtp
 SMTP_HOST: Final[str] = "smtp.gmail.com"
 SMTP_PORT: Final[int] = 587
-SMTP_EMAIL: Final[str] = "bartoszbiskup1234@gmail.com"
 
 # passwords
 MIN_PASSWORD_LENGTH: Final[int] = 8

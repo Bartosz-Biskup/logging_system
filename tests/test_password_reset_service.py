@@ -6,6 +6,7 @@ import pytest
 from db_and_models.user import AccountState
 from repos.password_reset_repo import PasswordResetRequest
 from services.password_reset_service import PasswordResetService
+from services.hashing_utils import HashingService
 from repos.user_repository import User
 from services.user_capability_checker_service import UserCapabilityCheckerService
 from services.ban_service import BanService
@@ -76,11 +77,17 @@ def capability_checker(user_repo, ban_service):
     return UserCapabilityCheckerService(user_repo, ban_service)
 
 @pytest.fixture
-def reset_service(password_repo, user_repo, mail_sender, capability_checker):
+def hashing_service():
+    return HashingService()
+
+
+@pytest.fixture
+def reset_service(password_repo, user_repo, mail_sender, capability_checker, hashing_service):
     return PasswordResetService(password_repo, 
                                 user_repo, 
                                 mail_sender,
-                                capability_checker)
+                                capability_checker,
+                                hashing_service)
 
 
 def test_generate_and_send_creates_new_link_when_none_exists(reset_service,
@@ -256,7 +263,7 @@ def test_reset_password_raises_when_user_removed_after_link_generated(reset_serv
     assert user_repo.get_user_by_id(user_id).password_hash == "SomeHashMyNigga" # making sure password hasn't changed before raising an error
 
 
-def test_reset_password_raises_when_link_already_used(reset_service, user_repo, password_repo, mocker): 
+def test_reset_password_raises_when_link_already_used(reset_service, user_repo, password_repo): 
     user_id = str(uuid4())
     user = User(
         id=user_id,
@@ -269,9 +276,8 @@ def test_reset_password_raises_when_link_already_used(reset_service, user_repo, 
     )
     user_repo.create_user(user)
 
-    def fake_hash(password: str) -> str:
-        return password
-    mocker.patch("services.hashing_utils.HashingService.hash_password", new=fake_hash)
+    # Patch the injected instance — lambda receives only the password (no auto-self)
+    reset_service._hashing_service.hash_password = lambda pw: pw
 
     reset_service.generate_and_send_password_reset_link("some@gmail.com")
     reset_service.reset_password_with_reset_request(password_repo.requests[0].id, "NewPassword1!")

@@ -1,30 +1,20 @@
-from pydantic import BaseModel, Field, field_validator
-from datetime import datetime, timezone
+from pydantic import BaseModel, Field
 from typing import Protocol
 from sqlalchemy import select
+from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from repos.exceptions import ObjectNotFoundException, ObjectAlreadyExists
+from repos._types import UTCDateTime, UTCDateTimeOrNone
 from db_and_models.refresh_token import RefreshToken as RefreshTokenModel
 
 
 class RefreshToken(BaseModel):
     id: str = Field(min_length=36, max_length=36)
     user_id: str = Field(min_length=36, max_length=36)
-    expires_at: datetime
-    revoked_at: datetime | None = None
-    created_at: datetime
-
-    @field_validator("expires_at", "revoked_at", "created_at", mode="before")
-    @classmethod
-    def validate_datetime(
-        cls,
-        value: datetime | None
-    ) -> datetime | None:
-        if value is None:
-            return None
-
-        return value.replace(tzinfo=timezone.utc)
+    expires_at: UTCDateTime
+    revoked_at: UTCDateTimeOrNone = None
+    created_at: UTCDateTime
 
     model_config = {
         "from_attributes": True

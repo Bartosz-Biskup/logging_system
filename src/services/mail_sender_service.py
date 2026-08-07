@@ -1,7 +1,17 @@
 import os
 import smtplib
 from typing import Protocol
-from services.config import SMTP_HOST, SMTP_PORT, SMTP_EMAIL
+from dotenv import load_dotenv
+from os import getenv
+from services.config import SMTP_HOST, SMTP_PORT
+
+
+def get_env_or_raise(var: str) -> str:
+    value: str | None = getenv(var)
+    if value is None:
+        raise ValueError("Couldn't load env value")
+
+    return value
 
 
 class MailSenderProtocol(Protocol):
@@ -16,7 +26,7 @@ class MailSender:
     def __init__(self) -> None:
         self._host: str = SMTP_HOST
         self._port: int = SMTP_PORT
-        self._email: str = SMTP_EMAIL
+        self._email: str = get_env_or_raise("SMTP_EMAIL")
         self._secret: str = os.getenv("SMTP_SECRET", "")
 
     def send(self,

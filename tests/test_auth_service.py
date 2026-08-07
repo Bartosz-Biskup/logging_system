@@ -5,8 +5,6 @@ from services.hashing_utils import HashingService
 import pytest
 from datetime import datetime, timezone, timedelta
 from uuid import uuid4
-from services.config import HASHING_TIME_COST
-from argon2 import PasswordHasher
 from services.token_service import TokenPair
 from repos.refresh_token_repository import RefreshToken
 from services.exceptions import NotAuthenticatedException
@@ -57,7 +55,7 @@ class FakeTokenService:
             access_token="fake-access", refresh_token="fake-refresh"
         )
 
-    def get_valid_refresh_token_or_raise(self, refresh_token: str) -> RefreshToken:
+    def get_valid_refresh_token_or_raise(self, refresh_token: str) -> RefreshToken | None:
         if self.should_raise_invalid:
             raise NotAuthenticatedException("Invalid refresh token.")
         return self.token_to_return
@@ -109,8 +107,13 @@ def fake_mfa_service():
 
 
 @pytest.fixture
-def auth_service(user_repo, fake_token_service, fake_capability_checker, fake_mfa_service):
-    return UserAuthService(user_repo, fake_token_service, fake_capability_checker, fake_mfa_service)
+def hashing_service():
+    return HashingService()
+
+
+@pytest.fixture
+def auth_service(user_repo, fake_token_service, fake_capability_checker, fake_mfa_service, hashing_service):
+    return UserAuthService(user_repo, fake_token_service, fake_capability_checker, fake_mfa_service, hashing_service)
 
 
 def test_get_active_user_or_raise_happy_path(auth_service, user_repo, fake_token_service):
@@ -181,7 +184,7 @@ def test_get_active_user_or_raise_user_not_capable(auth_service, user_repo, fake
         auth_service.get_active_user_from_refresh_token_or_raise("some-token")
 
 
-def test_login_happy_path(auth_service, user_repo, fake_token_service):
+def test_login_happy_path(auth_service, user_repo, fake_token_service, hashing_service):
     user_id = str(uuid4())
     password = "SomePassword1!"
     user_repo.create_user(
@@ -189,7 +192,7 @@ def test_login_happy_path(auth_service, user_repo, fake_token_service):
             id=user_id,
             username="some_username",
             email="example@gmail.com",
-            password_hash=HashingService.hash_password(password),
+            password_hash=hashing_service.hash_password(password),
             account_state=AccountState.active,
             role="user",
             created_at=datetime.now(timezone.utc)
@@ -209,10 +212,10 @@ def test_login_raises_when_user_not_found(auth_service, user_repo):
         auth_service.login("nieistniejacy@gmail.com", "cokolwiek")
 
 
-def test_login_raises_when_user_not_active(auth_service, user_repo):
+def test_login_raises_when_user_not_active(auth_service, user_repo, hashing_service):
     user_repo.create_user(User(
         id=str(uuid4()), username="Broski", email="x@gmail.com",
-        password_hash=HashingService.hash_password("Password1!"),
+        password_hash=hashing_service.hash_password("Password1!"),
         account_state=AccountState.pending_removal,
         role="user", created_at=datetime.now(timezone.utc)
     ))
@@ -220,20 +223,20 @@ def test_login_raises_when_user_not_active(auth_service, user_repo):
         auth_service.login("x@gmail.com", "Password1!")
 
 
-def test_login_raises_when_password_invalid(auth_service, user_repo):
+def test_login_raises_when_password_invalid(auth_service, user_repo, hashing_service):
     user_repo.create_user(User(
         id=str(uuid4()), username="Broski", email="x@gmail.com",
-        password_hash=HashingService.hash_password("Password1!"),
+        password_hash=hashing_service.hash_password("Password1!"),
         account_state=AccountState.active,
         role="user", created_at=datetime.now(timezone.utc)
     ))
     with pytest.raises(NotAuthenticatedException):
         auth_service.login("x@gmail.com", password="IncorrectPassword1!")
 
-def test_login_password_rehash_when_needed(auth_service, user_repo, monkeypatch):
+def test_login_password_rehash_when_needed(auth_service, user_repo, hashing_service):
     # Arrange
     user_id = str(uuid4())
-    old_hash = HashingService.hash_password("Password1!")
+    old_hash = hashing_service.hash_password("Password1!")
     user_repo.create_user(User(
         id=user_id, username="Broski", email="x@gmail.com",
         password_hash=old_hash,
@@ -241,10 +244,8 @@ def test_login_password_rehash_when_needed(auth_service, user_repo, monkeypatch)
         role="user", created_at=datetime.now(timezone.utc)
     ))
 
-    def fake_needs_rehash(hash_):
-        return True
-
-    monkeypatch.setattr("services.auth_service.HashingService.needs_rehash", fake_needs_rehash)
+    # Replace needs_rehash on the injected instance — no monkeypatch needed
+    auth_service._hashing_service.needs_rehash = lambda hash_: True
 
     # Act
     auth_service.login("x@gmail.com", "Password1!")
@@ -253,11 +254,11 @@ def test_login_password_rehash_when_needed(auth_service, user_repo, monkeypatch)
     updated_user = user_repo.get_user_by_id(user_id)
     assert updated_user.password_hash != old_hash
 
-def test_logout(auth_service, user_repo, fake_token_service):
+def test_logout(auth_service, user_repo, fake_token_service, hashing_service):
     user_id = str(uuid4())
     user_repo.create_user(User(
         id=user_id, username="Broski", email="x@gmail.com",
-        password_hash=HashingService.hash_password("Password1!"),
+        password_hash=hashing_service.hash_password("Password1!"),
         account_state=AccountState.active,
         role="user", created_at=datetime.now(timezone.utc)
     ))
@@ -279,11 +280,11 @@ def test_logout(auth_service, user_repo, fake_token_service):
 def test_logout_all_happy_path(auth_service,
                                user_repo,
                                fake_token_service,
-                               monkeypatch):
+                               hashing_service):
     user_id = str(uuid4())
     user_repo.create_user(User(
         id=user_id, username="Broski", email="x@gmail.com",
-        password_hash=HashingService.hash_password("Password1!"),
+        password_hash=hashing_service.hash_password("Password1!"),
         account_state=AccountState.active,
         role="user", created_at=datetime.now(timezone.utc)
     ))
@@ -298,11 +299,11 @@ def test_logout_all_happy_path(auth_service,
 
     assert fake_token_service.revoke_all_calls == [user_id]
 
-def test_refresh_token_pair_happy_path(auth_service, user_repo, fake_token_service):
+def test_refresh_token_pair_happy_path(auth_service, user_repo, fake_token_service, hashing_service):
     user_id = str(uuid4())
     user_repo.create_user(User(
         id=user_id, username="Broski", email="x@gmail.com",
-        password_hash=HashingService.hash_password("Password1!"),
+        password_hash=hashing_service.hash_password("Password1!"),
         account_state=AccountState.active,
         role="user", created_at=datetime.now(timezone.utc)
     ))
@@ -367,27 +368,27 @@ def test_get_active_user_from_access_token_user_not_capable(auth_service, user_r
         auth_service.get_active_user_from_access_token_or_raise("valid-token")
 
 
-def test_verify_password_or_reject_happy_path(auth_service, user_repo):
+def test_verify_password_or_reject_happy_path(auth_service, user_repo, hashing_service):
     password = "SomePassword1!"
     user_id = str(uuid4())
     user_repo.create_user(User(
         id=user_id, username="Broski", email="x@gmail.com",
-        password_hash=HashingService.hash_password(password),
+        password_hash=hashing_service.hash_password(password),
         account_state=AccountState.active,
         role="user", created_at=datetime.now(timezone.utc)
     ))
 
     user = user_repo.get_user_by_id(user_id)
 
-    auth_service.verify_password_or_reject(user, password)
+    auth_service._verify_password_or_reject(user, password)
 
 
-def test_verify_password_or_reject_raises_on_wrong_password(auth_service, user_repo):
+def test_verify_password_or_reject_raises_on_wrong_password(auth_service, user_repo, hashing_service):
     password = "SomePassword1!"
     user_id = str(uuid4())
     user_repo.create_user(User(
         id=user_id, username="Broski", email="x@gmail.com",
-        password_hash=HashingService.hash_password(password),
+        password_hash=hashing_service.hash_password(password),
         account_state=AccountState.active,
         role="user", created_at=datetime.now(timezone.utc)
     ))
@@ -395,4 +396,4 @@ def test_verify_password_or_reject_raises_on_wrong_password(auth_service, user_r
     user = user_repo.get_user_by_id(user_id)
 
     with pytest.raises(NotAuthenticatedException):
-        auth_service.verify_password_or_reject(user, "WrongPassword1!")
+        auth_service._verify_password_or_reject(user, "WrongPassword1!")
