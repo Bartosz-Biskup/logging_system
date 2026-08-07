@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard</title>
+  <link rel="stylesheet" href="/ui/css/style.css">
+</head>
+<body>
+  <!-- Navbar -->
+  <nav id="navbar">
+    <div class="nav-left">
+      <a href="/ui/" class="nav-brand">MyApp</a>
+      <a href="/ui/">Home</a>
+    </div>
+    <div class="nav-right">
+      <a href="/ui/account/">Account Settings</a>
+      <a href="#" id="logout-btn">Logout</a>
+    </div>
+  </nav>
+
+  <!-- Main content -->
+  <main id="content">
+    <div class="card">
+      <h1>Welcome</h1>
+      <p>You are signed in.</p>
+    </div>
+  </main>
+
+  <script src="/ui/js/auth.js"></script>
+  <script>
+    // --- Auth guard: redirect to login if not authenticated ---
+    AUTH.requireAuth();
+
+    // --- Logout ---
+    document.getElementById("logout-btn").addEventListener("click", async (e) => {
+      e.preventDefault();
+      try {
+        await AUTH.api("/auth/logout", { method: "POST" });
+      } catch (_) {
+        // Proceed with local logout even if the server call fails
+      }
+      AUTH.clearTokens();
+      window.location.replace("/ui/login/");
+    });
+  </script>
+</body>
+</html>

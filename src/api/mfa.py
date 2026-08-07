@@ -7,7 +7,7 @@ from api.dependencies import (
     get_user_auth_service,
     get_user_from_access_token,
 )
-from api.response_models import MfaSetupRequest
+from api.response_models import MfaResendRequest, MfaResendResponse, MfaSetupRequest
 from repos.user_repository import User
 from services.auth_service import UserAuthService
 from services.exceptions import MFAException, UserNotFoundException
@@ -49,3 +49,14 @@ def setup_mfa(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
     return {"message": "MFA set up successfully"}
+
+
+@router.post("/resend-mfa-code", status_code=status.HTTP_200_OK, response_model=MfaResendResponse)
+def resend_mfa_code(body: MfaResendRequest,
+                    mfa_service: Annotated[MFAService, Depends(get_mfa_service)]):
+    try:
+        new_code: MfaLoginCode = mfa_service.resend_mfa_code(body.request_id)
+    except MFAException as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+    return MfaResendResponse(request_id=new_code.id)

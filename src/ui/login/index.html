@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Login</title>
+  <link rel="stylesheet" href="/ui/css/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Step 1: Email + Password -->
+    <form id="login-form" class="card" novalidate>
+      <h1>Sign in</h1>
+      <p id="login-error" class="error" hidden></p>
+
+      <label for="email">Email</label>
+      <input type="email" id="email" name="email" required autocomplete="email">
+
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" required autocomplete="current-password">
+
+      <button type="submit" id="login-btn" class="btn-center">Sign in</button>
+
+      <p class="footer-link">
+        Don't have an account? <a href="/ui/register/">Register here</a>
+      </p>
+      <p class="footer-link" style="margin-top:4px;">
+        <a href="/ui/reset-password/">Forgot password?</a>
+      </p>
+    </form>
+
+    <!-- Step 2: MFA code (hidden initially) -->
+    <form id="mfa-form" class="card" hidden novalidate>
+      <h1>Two‑factor authentication</h1>
+      <p>A verification code was sent to your phone.</p>
+      <p id="mfa-error" class="error" hidden></p>
+
+      <label for="mfa-code">Code</label>
+      <input type="text" id="mfa-code" name="code" required
+             inputmode="numeric" autocomplete="one-time-code"
+             pattern="[0-9]{6}" maxlength="6"
+             placeholder="000000">
+
+      <button type="submit" id="mfa-btn">Verify</button>
+      <button type="button" id="mfa-back" class="btn-secondary">← Back</button>
+    </form>
+  </div>
+
+  <script src="/ui/js/auth.js"></script>
+  <script>
+    // --- If already logged in → skip straight to the redirect target ---
+    if (AUTH.isLoggedIn()) {
+      const params = new URLSearchParams(window.location.search);
+      window.location.replace(params.get("redirect") || "/ui/");
+    }
+
+    // --- DOM refs ---
+    const loginForm   = document.getElementById("login-form");
+    const mfaForm     = document.getElementById("mfa-form");
+    const loginError  = document.getElementById("login-error");
+    const mfaError    = document.getElementById("mfa-error");
+    const loginBtn    = document.getElementById("login-btn");
+    const mfaBtn      = document.getElementById("mfa-btn");
+    const mfaBack     = document.getElementById("mfa-back");
+
+    let mfaRequestId = null; // stored when MFA is required
+
+    // --- Helpers ---
+    function getRedirectTarget() {
+      const params = new URLSearchParams(window.location.search);
+      return params.get("redirect") || "/ui/";
+    }
+
+    function setLoading(btn, loading) {
+      btn.disabled = loading;
+      btn.textContent = loading ? "Please wait…" : btn.dataset.label;
+    }
+
+    /** Extract a readable message from FastAPI error responses.
+     *  FastAPI returns either { detail: "message" } or
+     *  { detail: [{ msg: "...", loc: [...] }] } for validation errors. */
+    function extractError(body) {
+      const detail = body.detail;
+      if (!detail) return "Something went wrong";
+      if (typeof detail === "string") return detail;
+      if (Array.isArray(detail)) {
+        return detail.map(e => e.msg || JSON.stringify(e)).join("; ");
+      }
+      return JSON.stringify(detail);
+    }
+
+    // Save original labels
+    loginBtn.dataset.label = loginBtn.textContent;
+    mfaBtn.dataset.label   = mfaBtn.textContent;
+
+    // --- Step 1: Login ---
+    loginForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      loginError.hidden = true;
+      setLoading(loginBtn, true);
+
+      const email    = document.getElementById("email").value.trim();
+      const password = document.getElementById("password").value;
+
+      try {
+        const res = await fetch("/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        });
+
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(extractError(body));
+        }
+
+        const data = await res.json();
+
+        if (data.status === "authenticated" && data.token_pair) {
+          // Fully authenticated — save tokens and redirect
+          AUTH.saveTokens(data.token_pair);
+          window.location.replace(getRedirectTarget());
+        } else if (data.status === "mfa_required") {
+          // Switch to MFA step
+          mfaRequestId = data.mfa_request_id;
+          loginForm.hidden = true;
+          mfaForm.hidden = false;
+          document.getElementById("mfa-code").focus();
+        }
+      } catch (err) {
+        loginError.textContent = err.message;
+        loginError.hidden = false;
+      } finally {
+        setLoading(loginBtn, false);
+      }
+    });
+
+    // --- Step 2: MFA ---
+    mfaForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      mfaError.hidden = true;
+      setLoading(mfaBtn, true);
+
+      const code = document.getElementById("mfa-code").value.trim();
+
+      try {
+        const res = await fetch("/mfa/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: mfaRequestId, code: Number(code) }),
+        });
+
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(extractError(body));
+        }
+
+        const data = await res.json();
+        AUTH.saveTokens(data); // TokenPair returned directly
+        window.location.replace(getRedirectTarget());
+      } catch (err) {
+        mfaError.textContent = err.message;
+        mfaError.hidden = false;
+      } finally {
+        setLoading(mfaBtn, false);
+      }
+    });
+
+    // --- Back button (MFA → login) ---
+    mfaBack.addEventListener("click", () => {
+      mfaForm.hidden = true;
+      loginForm.hidden = false;
+      mfaRequestId = null;
+      document.getElementById("mfa-code").value = "";
+      mfaError.hidden = true;
+    });
+  </script>
+</body>
+</html>

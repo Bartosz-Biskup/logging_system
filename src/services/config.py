@@ -11,6 +11,7 @@ TOKEN_AUD: Final[str] = "5012_logging_system"
 HASHING_TIME_COST: Final[int] = 3
 
 # password resetting
+BASE_URL: Final[str] = "http://localhost:8000"
 PASSWORD_RESET_REQUEST_EXPIRATION_TIME_HOURS: Final[int] = 1
 PASSWORD_RESET_REQUEST_DELAY_HOURS: Final[int] = 24
 

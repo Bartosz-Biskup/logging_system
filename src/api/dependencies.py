@@ -37,7 +37,7 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, expire_on_commit=Fals
 
 
 def get_db():
-    db = SessionLocal()
+    db: Session = SessionLocal()
     try:
         yield db
         db.commit()

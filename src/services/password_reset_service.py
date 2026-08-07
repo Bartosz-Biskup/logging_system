@@ -4,7 +4,8 @@ from uuid import uuid4
 from repos.password_reset_repo import PasswordResetRequestRepositoryProtocol, PasswordResetRequest
 from repos.user_repository import UserRepositoryProtocol, User
 from services.config import (PASSWORD_RESET_REQUEST_EXPIRATION_TIME_HOURS,
-                             PASSWORD_RESET_REQUEST_DELAY_HOURS)
+                             PASSWORD_RESET_REQUEST_DELAY_HOURS,
+                             BASE_URL)
 from services.mail_sender_service import MailSenderProtocol
 from services.hashing_utils import HashingServiceProtocol
 from services.password_validator import is_password_valid
@@ -49,7 +50,7 @@ class PasswordResetService:
         return user
 
     def _is_reset_request_valid(self, reset_request: PasswordResetRequest) -> bool:
-        now = datetime.now(timezone.utc)
+        now: datetime = datetime.now(timezone.utc)
 
         if reset_request.created_at > now:
             return False
@@ -69,7 +70,7 @@ class PasswordResetService:
         now = datetime.now(timezone.utc)
         if last_link is None:
             req_id: str = str(uuid4())
-            new_request = PasswordResetRequest(
+            new_request: PasswordResetRequest = PasswordResetRequest(
                 id=req_id,
                 user_id=user.id,
                 created_at=now,
@@ -79,14 +80,15 @@ class PasswordResetService:
             self._password_reset_repo.create_reset_request(new_request)
             self._mail_sender.send(user_email, 
                                                "5012 password reset request",
-                                               f"Hey, here is your password reset link: {req_id}")
+                                               f"Click here to reset your password: {BASE_URL}/ui/reset-password/?reset_request_id={req_id}\n\n"
+                                               f"This link expires in {PASSWORD_RESET_REQUEST_EXPIRATION_TIME_HOURS} hour(s).")
         elif self._is_reset_request_valid(last_link):
             ...
         elif last_link.created_at + timedelta(hours=PASSWORD_RESET_REQUEST_DELAY_HOURS) > now:
             raise ValueError('Cannot generate new password request link')
         else:
-            req_id = str(uuid4())
-            new_request = PasswordResetRequest(
+            req_id: str = str(uuid4())
+            new_request: PasswordResetRequest = PasswordResetRequest(
                 id=req_id,
                 user_id=user.id,
                 created_at=now,
@@ -96,7 +98,8 @@ class PasswordResetService:
             self._password_reset_repo.create_reset_request(new_request)
             self._mail_sender.send(user_email, 
                                    "5012 password reset request",
-                                   f"Hey, here is your password reset link: {req_id}")
+                                   f"Click here to reset your password: {BASE_URL}/ui/reset-password/?reset_request_id={req_id}\n\n"
+                                   f"This link expires in {PASSWORD_RESET_REQUEST_EXPIRATION_TIME_HOURS} hour(s).")
 
     def reset_password_with_reset_request(self,
                                           reset_request_id: str,

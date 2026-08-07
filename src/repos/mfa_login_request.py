@@ -47,6 +47,12 @@ class MfaLoginRequestRepositoryProtocol(Protocol):
     ) -> MfaLoginRequest | None:
         ...
 
+    def update_request(
+        self,
+        request: MfaLoginRequest
+    ) -> None:
+        ...
+
 
 class MfaLoginRequestRepository:
     def __init__(self, session: Session) -> None:
@@ -122,3 +128,26 @@ class MfaLoginRequestRepository:
             return None
 
         return MfaLoginRequest.model_validate(request)
+
+    def update_request(
+        self,
+        request: MfaLoginRequest
+    ) -> None:
+        orm_request: MfaLoginRequestModel | None = self._session.get(
+            MfaLoginRequestModel,
+            request.id
+        )
+
+        if orm_request is None:
+            raise ObjectNotFoundException()
+
+        orm_request.user_id = request.user_id
+        orm_request.code_hash = request.code_hash
+        orm_request.expires_at = request.expires_at
+        orm_request.confirmed_at = request.confirmed_at
+        orm_request.created_at = request.created_at
+
+        try:
+            self._session.flush()
+        except IntegrityError as e:
+            raise ObjectAlreadyExists() from e

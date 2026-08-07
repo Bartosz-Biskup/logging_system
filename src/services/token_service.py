@@ -91,12 +91,15 @@ class TokenService:
 
     def generate_token_pair_for_user(self, user_id: str, username: str, role: str) -> TokenPair:
         jti: str = str(uuid4())
-        access_token = self._jwt_issuer.create_access_token(
+        access_token: str = self._jwt_issuer.create_access_token(
             user_id=user_id,
             username=username,
             role=role,
             jti=jti,
         )
+        refresh_token: str
+        sub: str
+        exp: datetime
         refresh_token, jti, sub, exp = self._jwt_issuer.create_refresh_token(
             user_id=user_id, jti=jti,
         )

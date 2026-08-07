@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Register</title>
+  <link rel="stylesheet" href="/ui/css/style.css">
+</head>
+<body>
+  <div id="app">
+    <form id="register-form" class="card" novalidate>
+      <h1>Create account</h1>
+      <p id="register-error" class="error" hidden></p>
+      <p id="register-success" class="success-msg" hidden>
+        Account created! <a href="/ui/login/">Sign in here</a>.
+      </p>
+
+      <label for="username">Username</label>
+      <input type="text" id="username" name="username" required
+             minlength="3" maxlength="50" autocomplete="username">
+
+      <label for="email">Email</label>
+      <input type="email" id="email" name="email" required autocomplete="email">
+
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" required
+             minlength="8" maxlength="256" autocomplete="new-password">
+      <p class="hint">Must contain uppercase, lowercase, digit, special char — 8‑256 chars.</p>
+
+      <button type="submit" id="register-btn" class="btn-center">Create account</button>
+
+      <p class="footer-link">
+        Already have an account? <a href="/ui/login/">Sign in</a>
+      </p>
+    </form>
+  </div>
+
+  <script src="/ui/js/auth.js"></script>
+  <script>
+    if (AUTH.isLoggedIn()) {
+      window.location.replace("/ui/");
+    }
+
+    const form    = document.getElementById("register-form");
+    const errorEl = document.getElementById("register-error");
+    const successEl = document.getElementById("register-success");
+    const btn     = document.getElementById("register-btn");
+    btn.dataset.label = btn.textContent;
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errorEl.hidden = true;
+      successEl.hidden = true;
+      btn.disabled = true;
+      btn.textContent = "Creating account…";
+
+      try {
+        const res = await fetch("/users/register", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: document.getElementById("username").value.trim(),
+            email:    document.getElementById("email").value.trim(),
+            password: document.getElementById("password").value,
+          }),
+        });
+
+        const body = await res.json().catch(() => ({}));
+
+        if (!res.ok) {
+          const detail = body.detail;
+          let msg = "Registration failed";
+          if (typeof detail === "string") msg = detail;
+          else if (Array.isArray(detail)) msg = detail.map(d => d.msg).join("; ");
+          throw new Error(msg);
+        }
+
+        successEl.hidden = false;
+        form.reset();
+      } catch (err) {
+        errorEl.textContent = err.message;
+        errorEl.hidden = false;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = btn.dataset.label;
+      }
+    });
+  </script>
+</body>
+</html>

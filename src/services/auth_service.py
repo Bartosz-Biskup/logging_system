@@ -2,6 +2,7 @@ from typing import Protocol, NoReturn
 from pydantic import BaseModel
 from enum import Enum
 from services.token_service import TokenServiceProtocol, TokenPair
+from repos.refresh_token_repository import RefreshToken
 from repos.user_repository import UserRepositoryProtocol, User
 from services.hashing_utils import HashingServiceProtocol
 from services.exceptions import InvalidPasswordException, MFAException, NotAuthenticatedException, UserNotFoundException
@@ -58,7 +59,7 @@ class UserAuthService:
         self._hashing_service = hashing_service
 
     def get_active_user_from_refresh_token_or_raise(self, refresh_token: str) -> User:
-        ref_token = self._token_service.get_valid_refresh_token_or_raise(refresh_token)
+        ref_token: RefreshToken = self._token_service.get_valid_refresh_token_or_raise(refresh_token)
         return self._capability_checker.get_capable_user_by_id_or_raise(ref_token.user_id)
 
     def get_active_user_from_access_token_or_raise(self, access_token: str) -> User:
@@ -102,7 +103,7 @@ class UserAuthService:
             self._update_user_password_hash(user, self._hashing_service.hash_password(password))
 
         if self._mfa_service.has_mfa(user.id):
-            mfa_code = self._mfa_service.request_login_code(user.id)
+            mfa_code: MfaLoginCode = self._mfa_service.request_login_code(user.id)
             return LoginResponse(
                 status=LoginStatus.mfa_required,
                 token_pair=None,
@@ -116,8 +117,8 @@ class UserAuthService:
         )
 
     def confirm_mfa(self, mfa_code: MfaLoginCode) -> TokenPair:
-        user_id = self._mfa_service.confirm_login_code(mfa_code)
-        user = self._user_repo.get_user_by_id(user_id)
+        user_id: str = self._mfa_service.confirm_login_code(mfa_code)
+        user: User | None = self._user_repo.get_user_by_id(user_id)
         if user is None:
             raise MFAException
 

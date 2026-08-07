@@ -38,6 +38,9 @@ class MFAServiceProtocol(Protocol):
                 user_id: str) -> bool:
         ...
 
+    def resend_mfa_code(self, request_id: str) -> MfaLoginCode:
+        ...
+
 
 class MFAService:
     def __init__(self,
@@ -57,7 +60,7 @@ class MFAService:
                   phone_number: str) -> MfaSetup:
         self._user_capability_service.get_capable_user_by_id_or_raise(user_id)
 
-        existing_setup = self._mfa_setup_repo.get_mfa_setup_by_user(user_id)
+        existing_setup: MfaSetup | None = self._mfa_setup_repo.get_mfa_setup_by_user(user_id)
         if existing_setup is not None:
             raise MFAException("MFA is already set up for this user")
 
@@ -76,27 +79,20 @@ class MFAService:
                    user_id: str) -> None:
         self._user_capability_service.get_capable_user_by_id_or_raise(user_id)
 
-        existing_setup = self._mfa_setup_repo.get_mfa_setup_by_user(user_id)
+        existing_setup: MfaSetup | None = self._mfa_setup_repo.get_mfa_setup_by_user(user_id)
         if existing_setup is None:
             raise MFAException("MFA is not set up for this user")
 
         self._mfa_setup_repo.delete_mfa_setup(user_id)
 
-    def request_login_code(self, 
-                           user_id: str) -> MfaLoginCode:
-        self._user_capability_service.get_capable_user_by_id_or_raise(user_id)
+    def _create_and_send_mfa_request(self, user_id: str, phone_number: str) -> MfaLoginCode:
+        code: int = randint(100000, 999999)
+        code_hash: str = self._hashing_service.hash_password(str(code))
 
-        mfa_setup = self._mfa_setup_repo.get_mfa_setup_by_user(user_id)
-        if mfa_setup is None:
-            raise MFAException("MFA is not set up for this user")
+        request_id: str = str(uuid4())
+        now: datetime = datetime.now(timezone.utc)
 
-        code = randint(100000, 999999)
-        code_hash = self._hashing_service.hash_password(str(code))
-
-        request_id = str(uuid4())
-        now = datetime.now(timezone.utc)
-
-        login_request = MfaLoginRequest(
+        login_request: MfaLoginRequest = MfaLoginRequest(
             id=request_id,
             user_id=user_id,
             code_hash=code_hash,
@@ -107,19 +103,49 @@ class MFAService:
         self._mfa_login_repo.create_request(login_request)
 
         self._message_sender.send_message(
-            receiver=mfa_setup.user_phone_number,
+            receiver=phone_number,
             content=f"Your login code is: {code}"
         )
 
         return MfaLoginCode(id=request_id, code=code)
+    
+    def request_login_code(self, 
+                           user_id: str) -> MfaLoginCode:
+        self._user_capability_service.get_capable_user_by_id_or_raise(user_id)
+
+        mfa_setup = self._mfa_setup_repo.get_mfa_setup_by_user(user_id)
+        if mfa_setup is None:
+            raise MFAException("MFA is not set up for this user")
+
+        return self._create_and_send_mfa_request(user_id, mfa_setup.user_phone_number)
+
+    def resend_mfa_code(self, request_id: str) -> MfaLoginCode:
+        mfa_login_request: MfaLoginRequest | None = self._mfa_login_repo.get_request_by_id(request_id)
+        if mfa_login_request is None:
+            raise MFAException("Request doesn't exist")
+        
+        mfa_setup = self._mfa_setup_repo.get_mfa_setup_by_user(mfa_login_request.user_id)
+        if mfa_setup is None:
+            raise MFAException("MFA is not set up for this user")
+
+        if mfa_login_request.confirmed_at is not None:
+            raise MFAException("This login request has been already confirmed")
+
+        if mfa_login_request.expires_at <= datetime.now(timezone.utc):
+            raise MFAException("This login request has already expired")
+
+        mfa_login_request.expires_at = datetime.now(timezone.utc)
+        self._mfa_login_repo.update_request(mfa_login_request)
+
+        return self._create_and_send_mfa_request(mfa_login_request.user_id, mfa_setup.user_phone_number)
 
     def confirm_login_code(self, 
                            mfa_login_code: MfaLoginCode) -> str:
-        request = self._mfa_login_repo.get_request_by_id(mfa_login_code.id)
+        request: MfaLoginRequest | None = self._mfa_login_repo.get_request_by_id(mfa_login_code.id)
         if request is None:
             raise MFAException("MFA login request not found")
 
-        now = datetime.now(timezone.utc)
+        now: datetime = datetime.now(timezone.utc)
         if request.expires_at <= now:
             raise MFAException("MFA login request has expired")
 

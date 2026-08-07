@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reset Password</title>
+  <link rel="stylesheet" href="/ui/css/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Step 1: Enter email -->
+    <form id="request-form" class="card" novalidate>
+      <h1>Reset password</h1>
+      <p style="text-align:center;color:#666;margin-bottom:20px;">
+        Enter your email and we'll send you a reset link.
+      </p>
+      <p id="request-error" class="error" hidden></p>
+      <p id="request-success" class="success-msg" hidden></p>
+
+      <label for="email">Email</label>
+      <input type="email" id="email" required autocomplete="email">
+
+      <button type="submit" class="btn-center">Send reset link</button>
+
+      <p class="footer-link">
+        <a href="/ui/login/">← Back to sign in</a>
+      </p>
+    </form>
+
+    <!-- Step 2: Enter new password (shown when ?reset_request_id= is present) -->
+    <form id="reset-form" class="card" hidden novalidate>
+      <h1>Set new password</h1>
+      <p id="reset-error" class="error" hidden></p>
+      <p id="reset-success" class="success-msg" hidden></p>
+
+      <label for="new-password">New password</label>
+      <input type="password" id="new-password" required
+             minlength="8" maxlength="256" autocomplete="new-password">
+      <p class="hint">Must contain uppercase, lowercase, digit, special char — 8‑256 chars.</p>
+
+      <button type="submit" class="btn-center">Reset password</button>
+
+      <p class="footer-link">
+        <a href="/ui/login/">← Back to sign in</a>
+      </p>
+    </form>
+  </div>
+
+  <script>
+    // --- Check if we have a reset_request_id in the URL ---
+    const params = new URLSearchParams(window.location.search);
+    const resetRequestId = params.get("reset_request_id");
+
+    const requestForm   = document.getElementById("request-form");
+    const resetForm     = document.getElementById("reset-form");
+    const requestError  = document.getElementById("request-error");
+    const requestSuccess = document.getElementById("request-success");
+    const resetError    = document.getElementById("reset-error");
+    const resetSuccess  = document.getElementById("reset-success");
+
+    function setLoading(btn, loading) {
+      btn.disabled = loading;
+      btn.textContent = loading ? "Please wait…" : btn.dataset.label;
+    }
+
+    // --- If reset_request_id is present, show step 2 ---
+    if (resetRequestId) {
+      requestForm.hidden = true;
+      resetForm.hidden = false;
+
+      const resetBtn = resetForm.querySelector("button");
+      resetBtn.dataset.label = resetBtn.textContent;
+
+      resetForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        resetError.hidden = true;
+        resetSuccess.hidden = true;
+        setLoading(resetBtn, true);
+
+        try {
+          const res = await fetch("/users/password-reset/reset", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              reset_request_id: resetRequestId,
+              new_password: document.getElementById("new-password").value,
+            }),
+          });
+
+          const body = await res.json().catch(() => ({}));
+
+          if (!res.ok) {
+            const detail = body.detail;
+            let msg = "Reset failed";
+            if (typeof detail === "string") msg = detail;
+            else if (Array.isArray(detail)) msg = detail.map(d => d.msg).join("; ");
+            throw new Error(msg);
+          }
+
+          resetSuccess.textContent = "Password reset successfully! Redirecting to login…";
+          resetSuccess.hidden = false;
+          resetForm.querySelector("button").hidden = true;
+          setTimeout(() => { window.location.replace("/ui/login/"); }, 2000);
+        } catch (err) {
+          resetError.textContent = err.message;
+          resetError.hidden = false;
+        } finally {
+          setLoading(resetBtn, false);
+        }
+      });
+    } else {
+      // --- Step 1: Request reset link ---
+      const requestBtn = requestForm.querySelector("button");
+      requestBtn.dataset.label = requestBtn.textContent;
+
+      requestForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        requestError.hidden = true;
+        requestSuccess.hidden = true;
+        setLoading(requestBtn, true);
+
+        try {
+          await fetch("/users/password-reset/request", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email: document.getElementById("email").value.trim(),
+            }),
+          });
+          // Always show success regardless of response (prevents email enumeration)
+          requestSuccess.textContent = "If the email is registered, a reset link has been sent.";
+          requestSuccess.hidden = false;
+        } catch (_) {
+          requestError.textContent = "Something went wrong. Please try again.";
+          requestError.hidden = false;
+        } finally {
+          setLoading(requestBtn, false);
+        }
+      });
+    }
+  </script>
+</body>
+</html>

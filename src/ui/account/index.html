@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Account Settings</title>
+  <link rel="stylesheet" href="/ui/css/style.css">
+</head>
+<body>
+  <nav id="navbar">
+    <div class="nav-left">
+      <a href="/ui/" class="nav-brand">MyApp</a>
+      <a href="/ui/">Home</a>
+    </div>
+    <div class="nav-right">
+      <a href="/ui/account/">Account Settings</a>
+      <a href="#" id="logout-btn">Logout</a>
+    </div>
+  </nav>
+
+  <main id="content">
+    <h1 style="margin-bottom:24px">Account Settings</h1>
+
+    <!-- User info -->
+    <section class="account-section" id="user-info-section">
+      <h2>Your Profile</h2>
+      <p id="user-info-loading">Loading…</p>
+      <div id="user-info-data" hidden>
+        <div class="user-info-grid">
+          <span class="label">Username</span><span id="info-username"></span>
+          <span class="label">Email</span><span id="info-email"></span>
+          <span class="label">Role</span><span id="info-role"></span>
+          <span class="label">Status</span><span id="info-status"></span>
+          <span class="label">Joined</span><span id="info-created"></span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Change Username -->
+    <section class="account-section">
+      <h2>Change Username</h2>
+      <form id="username-form" novalidate>
+        <label for="new-username">New username</label>
+        <input type="text" id="new-username" required minlength="3" maxlength="50">
+        <button type="submit">Update Username</button>
+        <p id="username-error" class="error" hidden></p>
+        <p id="username-success" class="success-msg" hidden></p>
+      </form>
+    </section>
+
+    <!-- Change Email -->
+    <section class="account-section">
+      <h2>Change Email</h2>
+      <form id="email-form" novalidate>
+        <label for="new-email">New email</label>
+        <input type="email" id="new-email" required>
+        <button type="submit">Update Email</button>
+        <p id="email-error" class="error" hidden></p>
+        <p id="email-success" class="success-msg" hidden></p>
+      </form>
+    </section>
+
+    <!-- Change Password -->
+    <section class="account-section">
+      <h2>Change Password</h2>
+      <form id="password-form" novalidate>
+        <label for="current-password">Current password</label>
+        <input type="password" id="current-password" required autocomplete="current-password">
+
+        <label for="new-password">New password</label>
+        <input type="password" id="new-password" required autocomplete="new-password"
+               minlength="8" maxlength="256">
+        <button type="submit">Update Password</button>
+        <p id="password-error" class="error" hidden></p>
+        <p id="password-success" class="success-msg" hidden></p>
+      </form>
+    </section>
+
+    <!-- MFA Setup -->
+    <section class="account-section">
+      <h2>Two‑Factor Authentication (MFA)</h2>
+      <form id="mfa-setup-form" novalidate>
+        <label for="phone-number">Phone number</label>
+        <input type="text" id="phone-number" required
+               placeholder="+48123456789">
+        <button type="submit">Set up MFA</button>
+        <p id="mfa-error" class="error" hidden></p>
+        <p id="mfa-success" class="success-msg" hidden></p>
+      </form>
+    </section>
+
+    <!-- Sessions -->
+    <section class="account-section">
+      <h2>Sessions</h2>
+      <button id="logout-all-btn" style="color:#dc2626;background:transparent;padding:10px 20px;">
+        Logout from all devices
+      </button>
+    </section>
+  </main>
+
+  <script src="/ui/js/auth.js"></script>
+  <script>
+    AUTH.requireAuth();
+
+    // --- Decode JWT to get username ---
+    function getUsernameFromToken() {
+      try {
+        const token = AUTH.getAccessToken();
+        const payload = JSON.parse(atob(token.split(".")[1]));
+        return payload.username || null;
+      } catch (_) { return null; }
+    }
+
+    // --- Load user info ---
+    async function loadUserInfo() {
+      const username = getUsernameFromToken();
+      if (!username) {
+        document.getElementById("user-info-loading").textContent = "Could not read session.";
+        return;
+      }
+      try {
+        const user = await AUTH.api(`/users/get/${encodeURIComponent(username)}`);
+        document.getElementById("user-info-loading").hidden = true;
+        const data = document.getElementById("user-info-data");
+        data.hidden = false;
+        document.getElementById("info-username").textContent = user.username;
+        document.getElementById("info-email").textContent    = user.email;
+        document.getElementById("info-role").textContent     = user.role;
+        document.getElementById("info-status").textContent   = user.account_state;
+        document.getElementById("info-created").textContent  = new Date(user.created_at).toLocaleDateString();
+      } catch (err) {
+        document.getElementById("user-info-loading").textContent =
+          "Failed to load profile: " + (err.detail || err.message || "unknown error");
+      }
+    }
+    loadUserInfo();
+
+    // --- Logout ---
+    document.getElementById("logout-btn").addEventListener("click", async (e) => {
+      e.preventDefault();
+      try { await AUTH.api("/auth/logout", { method: "POST" }); } catch (_) {}
+      AUTH.clearTokens();
+      window.location.replace("/ui/login/");
+    });
+
+    // --- Logout all ---
+    document.getElementById("logout-all-btn").addEventListener("click", async () => {
+      try { await AUTH.api("/auth/logout-all", { method: "POST" }); } catch (_) {}
+      AUTH.clearTokens();
+      window.location.replace("/ui/login/");
+    });
+
+    // --- Helper: handle form response ---
+    function handleForm(formId, path, buildBody, errorId, successId, successText) {
+      const form = document.getElementById(formId);
+      const errorEl = document.getElementById(errorId);
+      const successEl = document.getElementById(successId);
+      const btn = form.querySelector("button");
+
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        errorEl.hidden = true;
+        successEl.hidden = true;
+        btn.disabled = true;
+        const original = btn.textContent;
+        btn.textContent = "Saving…";
+
+        try {
+          await AUTH.api(path, {
+            method: "PATCH",
+            body: JSON.stringify(buildBody()),
+          });
+          successEl.textContent = successText;
+          successEl.hidden = false;
+          form.reset();
+          // Refresh user info after username/email change
+          if (path.includes("username") || path.includes("email")) {
+            loadUserInfo();
+          }
+        } catch (err) {
+          errorEl.textContent = err.detail || "Something went wrong";
+          errorEl.hidden = false;
+        } finally {
+          btn.disabled = false;
+          btn.textContent = original;
+        }
+      });
+    }
+
+    handleForm("username-form", "/users/username", () => ({
+      new_username: document.getElementById("new-username").value.trim(),
+    }), "username-error", "username-success", "Username updated.");
+
+    handleForm("email-form", "/users/email", () => ({
+      new_email: document.getElementById("new-email").value.trim(),
+    }), "email-error", "email-success", "Email updated.");
+
+    handleForm("password-form", "/users/password", () => ({
+      current_password: document.getElementById("current-password").value,
+      new_password: document.getElementById("new-password").value,
+    }), "password-error", "password-success", "Password updated.");
+
+    // --- MFA Setup ---
+    handleForm("mfa-setup-form", "/mfa/setup", () => ({
+      phone_number: document.getElementById("phone-number").value.trim(),
+    }), "mfa-error", "mfa-success", "MFA set up successfully.");
+  </script>
+</body>
+</html>

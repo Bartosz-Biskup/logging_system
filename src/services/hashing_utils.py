@@ -19,7 +19,7 @@ class HashingServiceProtocol(Protocol):
 
 class HashingService:
     def __init__(self) -> None:
-        self.password_hasher = PasswordHasher(time_cost=HASHING_TIME_COST)
+        self.password_hasher: PasswordHasher = PasswordHasher(time_cost=HASHING_TIME_COST)
         self._DUMMY_HASH: str = self.password_hasher.hash("some dummy password")
 
     def hash_password(self, password: str) -> str:

@@ -75,6 +75,11 @@ class FakeMfaLoginRequestRepository:
                 return request
         return None
 
+    def update_request(self, request: MfaLoginRequest) -> None:
+        if self.requests.get(request.id) is None:
+            raise ValueError(f"MFA login request {request.id} not found")
+        self.requests[request.id] = request
+
 
 @pytest.fixture
 def mfa_setup_repo():
@@ -273,3 +278,33 @@ def test_confirm_login_code_raises_when_code_invalid(mfa_service, mfa_setup_repo
 
     with pytest.raises(MFAException):
         mfa_service.confirm_login_code(wrong_code)
+
+
+def test_resend_mfa_happy_path(mfa_service, mfa_login_request_repo, user_repo, mfa_setup_repo):
+    user = get_user_with_mfa(user_repo, mfa_setup_repo)
+    login_code = mfa_service.request_login_code(user.id)
+
+    new_code = mfa_service.resend_mfa_code(login_code.id)
+
+    assert mfa_login_request_repo.get_request_by_id(login_code.id).expires_at < datetime.now(timezone.utc)
+    assert isinstance(new_code, MfaLoginCode)
+    assert mfa_login_request_repo.get_request_by_id(new_code.id) is not None
+
+
+def test_resend_mfa_raises_when_mfa_expired(mfa_service, mfa_login_request_repo, user_repo, mfa_setup_repo):
+    user = get_user_with_mfa(user_repo, mfa_setup_repo)
+    login_code = mfa_service.request_login_code(user.id)
+    mfa_login_request = mfa_login_request_repo.get_request_by_id(login_code.id)
+    mfa_login_request.expires_at = datetime.now(timezone.utc) - timedelta(minutes=3)
+
+    with pytest.raises(MFAException):
+        new_code = mfa_service.resend_mfa_code(login_code.id)
+
+def test_resend_mfa_raises_when_used(mfa_service, mfa_login_request_repo, user_repo, mfa_setup_repo):
+    user = get_user_with_mfa(user_repo, mfa_setup_repo)
+    login_code = mfa_service.request_login_code(user.id)
+    mfa_login_request = mfa_login_request_repo.get_request_by_id(login_code.id)
+    mfa_login_request.confirmed_at = datetime.now(timezone.utc)
+
+    with pytest.raises(MFAException):
+        new_code = mfa_service.resend_mfa_code(login_code.id)

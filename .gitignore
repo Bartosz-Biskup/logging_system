@@ -1,24 +1,36 @@
-# venv
-.venv
-**/.env
-**/.env.*
-!**/.env.example
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
 
-# ide
-.idea
-.vscode
+# Virtual environment
+.venv/
+venv/
+env/
 
-# tests
-.pytest_cache
-htmlcov
+# Environment variables
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# Testing
+.pytest_cache/
+htmlcov/
 .coverage
+coverage.xml
 
-# python
-**/__pycache__
-.mypy_cache
-
-# macos
+# OS
 .DS_Store
+Thumbs.db
+
+# App-specific
+example.txt
+dump.rdb
 
 # other
-dump.rdb
+TODO.txt

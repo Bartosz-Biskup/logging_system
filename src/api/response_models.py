@@ -54,3 +54,9 @@ class ResetPasswordBody(BaseModel):
 
 class MfaSetupRequest(BaseModel):
     phone_number: str
+
+class MfaResendRequest(BaseModel):
+    request_id: str = Field(min_length=36, max_length=36)
+
+class MfaResendResponse(BaseModel):
+    request_id: str = Field(min_length=36, max_length=36)
